@@ -7,7 +7,7 @@ from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineK
 from config import Config
 from database import (
     get_user, create_user, update_balance, ban_user, unban_user,
-    get_unbanned_users, get_all_users, get_finance_stats,
+    get_unbanned_users, get_banned_users, get_all_users, get_finance_stats,
     get_pending_deposits, get_pending_redeems, approve_deposit,
     reject_deposit, approve_redeem, reject_redeem, cancel_redeem_by_user,
     create_transaction
@@ -547,6 +547,68 @@ async def user_text_handler(client: Client, message: Message):
             else:
                 await clean_send(client, user_id, "❌ Action failed (e.g. insufficient user balance).", reply_markup=get_admin_keyboard())
             return
+
+        # 3. Admin Ban User
+        elif state["action"] == "wait_ban":
+            admin_states.pop(user_id, None)
+            user_identifier = text
+            if user_identifier.startswith("@"):
+                user_identifier = user_identifier[1:]
+                
+            # Find user
+            target_user = None
+            try:
+                target_user = get_user(int(user_identifier))
+            except ValueError:
+                all_users = get_all_users()
+                for u in all_users:
+                    if u.get("username") == user_identifier:
+                        target_user = u
+                        break
+                        
+            if not target_user:
+                await clean_send(client, user_id, f"❌ User '{user_identifier}' not found in database.", reply_markup=get_admin_keyboard())
+                return
+                
+            ban_user(target_user["_id"])
+            await clean_send(
+                client,
+                user_id,
+                f"✅ User {target_user['first_name']} (@{target_user.get('username')}) has been BANNED.",
+                reply_markup=get_admin_keyboard()
+            )
+            return
+
+        # 4. Admin Unban User
+        elif state["action"] == "wait_unban":
+            admin_states.pop(user_id, None)
+            user_identifier = text
+            if user_identifier.startswith("@"):
+                user_identifier = user_identifier[1:]
+                
+            # Find user
+            target_user = None
+            try:
+                target_user = get_user(int(user_identifier))
+            except ValueError:
+                all_users = get_all_users()
+                for u in all_users:
+                    if u.get("username") == user_identifier:
+                        target_user = u
+                        break
+                        
+            if not target_user:
+                await clean_send(client, user_id, f"❌ User '{user_identifier}' not found in database.", reply_markup=get_admin_keyboard())
+                return
+                
+            unban_user(target_user["_id"])
+            await clean_send(
+                client,
+                user_id,
+                f"✅ User {target_user['first_name']} (@{target_user.get('username')}) has been UNBANNED.",
+                reply_markup=get_admin_keyboard()
+            )
+            return
             
     # Check user states
     if user_id in user_states:
@@ -831,43 +893,6 @@ async def addbalance_handler(client: Client, message: Message):
     if user_id != Config.ADMIN_ID:
         return
         
-    # Check if there are arguments
-    if len(message.command) > 2:
-        user_identifier = message.command[1]
-        if user_identifier.startswith("@"):
-            user_identifier = user_identifier[1:]
-        amount = float(message.command[2])
-        
-        # Resolve target user
-        target_user = None
-        try:
-            target_user = get_user(int(user_identifier))
-        except ValueError:
-            all_users = get_all_users()
-            for u in all_users:
-                if u.get("username") == user_identifier:
-                    target_user = u
-                    break
-                    
-        if not target_user:
-            await clean_send(client, user_id, f"❌ User '{user_identifier}' not found.")
-            return
-            
-        success, new_bal = update_balance(target_user["_id"], amount, "admin_add", {"admin_id": user_id})
-        if success:
-            try:
-                await client.send_message(
-                    target_user["_id"],
-                    f"🔔 Admin added **Rs {amount:.2f}** to your wallet. New Balance: **Rs {new_bal:.2f}**"
-                )
-            except Exception:
-                pass
-            await clean_send(client, user_id, f"✅ Added Rs {amount} to {target_user['first_name']}. New Balance: Rs {new_bal}")
-        else:
-            await clean_send(client, user_id, "❌ Action failed.")
-        return
-
-    # Otherwise show list of unbanned users and ask for selection
     unbanned = get_unbanned_users()
     user_list = "\n".join([f"• `{u['_id']}` - {u['first_name']} (@{u.get('username', 'N/A')})" for u in unbanned[:30]])
     
@@ -875,9 +900,9 @@ async def addbalance_handler(client: Client, message: Message):
     await clean_send(
         client,
         user_id,
-        f"➕ **Add Balance / Coins**\n\n"
+        f"➕ **Add Coins**\n\n"
         f"**Active Unbanned Users:**\n{user_list}\n\n"
-        f"👉 Please type: `<username_or_userid> <amount_to_add>`",
+        f"👉 Please send `<username> <amount>` to add to user wallet.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")]])
     )
 
@@ -888,42 +913,6 @@ async def removebalance_handler(client: Client, message: Message):
     if user_id != Config.ADMIN_ID:
         return
         
-    # Check if there are arguments
-    if len(message.command) > 2:
-        user_identifier = message.command[1]
-        if user_identifier.startswith("@"):
-            user_identifier = user_identifier[1:]
-        amount = float(message.command[2])
-        
-        # Resolve target user
-        target_user = None
-        try:
-            target_user = get_user(int(user_identifier))
-        except ValueError:
-            all_users = get_all_users()
-            for u in all_users:
-                if u.get("username") == user_identifier:
-                    target_user = u
-                    break
-                    
-        if not target_user:
-            await clean_send(client, user_id, f"❌ User '{user_identifier}' not found.")
-            return
-            
-        success, new_bal = update_balance(target_user["_id"], -amount, "admin_remove", {"admin_id": user_id})
-        if success:
-            try:
-                await client.send_message(
-                    target_user["_id"],
-                    f"🔔 Admin removed **Rs {amount:.2f}** from your wallet. New Balance: **Rs {new_bal:.2f}**"
-                )
-            except Exception:
-                pass
-            await clean_send(client, user_id, f"✅ Removed Rs {amount} from {target_user['first_name']}. New Balance: Rs {new_bal}")
-        else:
-            await clean_send(client, user_id, "❌ Action failed (insufficient balance).")
-        return
-
     unbanned = get_unbanned_users()
     user_list = "\n".join([f"• `{u['_id']}` - {u['first_name']} (@{u.get('username', 'N/A')})" for u in unbanned[:30]])
     
@@ -931,9 +920,9 @@ async def removebalance_handler(client: Client, message: Message):
     await clean_send(
         client,
         user_id,
-        f"➖ **Remove Balance / Coins**\n\n"
+        f"➖ **Remove Coins**\n\n"
         f"**Active Unbanned Users:**\n{user_list}\n\n"
-        f"👉 Please type: `<username_or_userid> <amount_to_remove>`",
+        f"👉 Please send `<username> <amount>` to remove from user wallet.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")]])
     )
 
@@ -945,30 +934,18 @@ async def ban_handler(client: Client, message: Message):
     if user_id != Config.ADMIN_ID:
         return
         
-    if len(message.command) < 2:
-        await clean_send(client, user_id, "❌ Usage: `/ban <username_or_userid>`")
-        return
-        
-    user_identifier = message.command[1]
-    if user_identifier.startswith("@"):
-        user_identifier = user_identifier[1:]
+    unbanned = get_unbanned_users()
+    user_list = "\n".join([f"• `{u['_id']}` - {u['first_name']} (@{u.get('username', 'N/A')})" for u in unbanned[:30]])
     
-    target_user = None
-    try:
-        target_user = get_user(int(user_identifier))
-    except ValueError:
-        all_users = get_all_users()
-        for u in all_users:
-            if u.get("username") == user_identifier:
-                target_user = u
-                break
-                
-    if not target_user:
-        await clean_send(client, user_id, f"❌ User '{user_identifier}' not found.")
-        return
-        
-    ban_user(target_user["_id"])
-    await clean_send(client, user_id, f"✅ User {target_user['first_name']} (@{target_user.get('username')}) has been BANNED.")
+    admin_states[user_id] = {"action": "wait_ban"}
+    await clean_send(
+        client,
+        user_id,
+        f"🚫 **Ban User**\n\n"
+        f"**Active Unbanned Users:**\n{user_list}\n\n"
+        f"👉 Please send `<username>` to ban that user.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")]])
+    )
 
 @bot.on_message(filters.command("unban") & filters.private)
 async def unban_handler(client: Client, message: Message):
@@ -977,27 +954,18 @@ async def unban_handler(client: Client, message: Message):
     if user_id != Config.ADMIN_ID:
         return
         
-    if len(message.command) < 2:
-        await clean_send(client, user_id, "❌ Usage: `/unban <username_or_userid>`")
-        return
+    banned = get_banned_users()
+    if not banned:
+        user_list = "*No banned users found.*"
+    else:
+        user_list = "\n".join([f"• `{u['_id']}` - {u['first_name']} (@{u.get('username', 'N/A')})" for u in banned[:30]])
         
-    user_identifier = message.command[1]
-    if user_identifier.startswith("@"):
-        user_identifier = user_identifier[1:]
-    
-    target_user = None
-    try:
-        target_user = get_user(int(user_identifier))
-    except ValueError:
-        all_users = get_all_users()
-        for u in all_users:
-            if u.get("username") == user_identifier:
-                target_user = u
-                break
-                
-    if not target_user:
-        await clean_send(client, user_id, f"❌ User '{user_identifier}' not found.")
-        return
-        
-    unban_user(target_user["_id"])
-    await clean_send(client, user_id, f"✅ User {target_user['first_name']} (@{target_user.get('username')}) has been UNBANNED.")
+    admin_states[user_id] = {"action": "wait_unban"}
+    await clean_send(
+        client,
+        user_id,
+        f"🔓 **Unban User**\n\n"
+        f"**Banned Users:**\n{user_list}\n\n"
+        f"👉 Please send `<username>` to unban that user.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")]])
+    )

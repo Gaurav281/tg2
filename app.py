@@ -41,10 +41,12 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 # Initialize Flask and SocketIO
+from flask_cors import CORS
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "hand_cricket_secret_key_13579")
 
-# Enable CORS for React Frontend deployment (Vercel)
+# Enable CORS for React Frontend HTTP requests & Socket.IO
+CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # Track connected users: user_id (int) -> socket_id (str)

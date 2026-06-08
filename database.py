@@ -255,6 +255,9 @@ def unban_user(user_id):
 def get_unbanned_users():
     return list(users_col.find({"is_banned": False}))
 
+def get_banned_users():
+    return list(users_col.find({"is_banned": True}))
+
 def get_all_users():
     return list(users_col.find())
 
