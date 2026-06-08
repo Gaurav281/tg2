@@ -80,8 +80,18 @@ def get_admin_keyboard():
     """Admin controls keyboard."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Stats & Analytics", callback_data="admin_stats")],
-        [InlineKeyboardButton("📥 Pending Deposits", callback_data="admin_pending_dep")],
-        [InlineKeyboardButton("📤 Pending Redeems", callback_data="admin_pending_red")],
+        [
+            InlineKeyboardButton("➕ Add Coins", callback_data="admin_add_coins"),
+            InlineKeyboardButton("➖ Remove Coins", callback_data="admin_remove_coins")
+        ],
+        [
+            InlineKeyboardButton("🚫 Ban User", callback_data="admin_ban_user"),
+            InlineKeyboardButton("🔓 Unban User", callback_data="admin_unban_user")
+        ],
+        [
+            InlineKeyboardButton("📥 Pending Deposits", callback_data="admin_pending_dep"),
+            InlineKeyboardButton("📤 Pending Redeems", callback_data="admin_pending_red")
+        ],
         [InlineKeyboardButton("📣 Broadcast Message", callback_data="admin_broadcast")],
         [InlineKeyboardButton("↩️ Back to Main Menu", callback_data="main_menu")]
     ])
