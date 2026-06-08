@@ -2,8 +2,11 @@ import uuid
 import requests
 import urllib.parse
 from datetime import datetime, timezone, timedelta
+
+# Indian Standard Time (IST)
+IST = timezone(timedelta(hours=5, minutes=30))
 from config import Config
-from database import tasks_col, task_stats_col, update_balance, get_user
+from database import tasks_col, task_stats_col, update_balance, get_user, to_ist
 
 def get_backend_url():
     # If a backend URL is configured, use it, otherwise fall back to WEB_APP_URL replacing port if local
@@ -25,7 +28,7 @@ def check_and_update_expired_tasks(user_id):
     and increment the user's daily expired task count.
     """
     user_id = int(user_id)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(IST)
     today_str = now.strftime("%Y-%m-%d")
     
     # Retrieve or create user stats
@@ -85,7 +88,7 @@ def create_or_get_task(user_id):
         return None, "limit_reached"
         
     # 2. Check if there is an active ongoing task
-    now = datetime.now(timezone.utc)
+    now = datetime.now(IST)
     ongoing_task = tasks_col.find_one({
         "user_id": user_id,
         "status": "ongoing",
@@ -93,7 +96,7 @@ def create_or_get_task(user_id):
     })
     
     if ongoing_task:
-        remaining_time = ongoing_task["expires_at"].replace(tzinfo=timezone.utc) - now
+        remaining_time = to_ist(ongoing_task["expires_at"]) - now
         # If more than 10 minutes (600s) left, return the same task
         if remaining_time.total_seconds() > 600:
             return ongoing_task, "existing"
@@ -158,7 +161,7 @@ def verify_and_reward_task(task_id):
     Verify the completed task ID, reward user 0.60 Rs.
     Returns: (success_bool, user_id_or_error_msg)
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(IST)
     task = tasks_col.find_one({"_id": task_id})
     
     if not task:
@@ -167,7 +170,7 @@ def verify_and_reward_task(task_id):
     if task["status"] == "completed":
         return False, "Task already completed"
         
-    if task["status"] == "expired" or task["expires_at"].replace(tzinfo=timezone.utc) < now:
+    if task["status"] == "expired" or to_ist(task["expires_at"]) < now:
         if task["status"] == "ongoing":
             # Update to expired
             tasks_col.update_one({"_id": task_id}, {"$set": {"status": "expired"}})

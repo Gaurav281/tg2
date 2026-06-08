@@ -1,6 +1,16 @@
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 from datetime import datetime, timezone, timedelta
+
+# Indian Standard Time (IST)
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def to_ist(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST)
 from config import Config
 
 # Initialize MongoDB client
@@ -45,7 +55,7 @@ def create_user(user_id, username, first_name, referred_by=None):
         "referrals_count": 0,
         "referral_claimed": [],  # list of strings: "1", "5", "10"
         "daily_missions": {
-            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "matches_played": 0,
             "balance_added": 0.0,
             "max_score": 0,
@@ -56,7 +66,7 @@ def create_user(user_id, username, first_name, referred_by=None):
             }
         },
         "is_banned": False,
-        "created_at": datetime.now(timezone.utc)
+        "created_at": datetime.now(IST)
     }
     
     users_col.insert_one(user_doc)
@@ -133,8 +143,8 @@ def create_transaction(user_id, tx_type, amount, status, details=None):
         "amount": round(float(amount), 2),
         "status": status,  # pending, approved, rejected, completed
         "details": details or {},
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc)
+        "created_at": datetime.now(IST),
+        "updated_at": datetime.now(IST)
     }
     result = transactions_col.insert_one(tx_doc)
     return result.inserted_id
@@ -168,7 +178,7 @@ def approve_deposit(tx_id):
             "$set": {
                 "status": "approved",
                 "amount": final_amount, # store final credited amount
-                "updated_at": datetime.now(timezone.utc)
+                "updated_at": datetime.now(IST)
             }
         }
     )
@@ -186,7 +196,7 @@ def reject_deposit(tx_id):
         
     transactions_col.update_one(
         {"_id": ObjectId(tx_id)},
-        {"$set": {"status": "rejected", "updated_at": datetime.now(timezone.utc)}}
+        {"$set": {"status": "rejected", "updated_at": datetime.now(IST)}}
     )
     return True, tx["user_id"]
 
@@ -198,7 +208,7 @@ def approve_redeem(tx_id):
         
     transactions_col.update_one(
         {"_id": ObjectId(tx_id)},
-        {"$set": {"status": "approved", "updated_at": datetime.now(timezone.utc)}}
+        {"$set": {"status": "approved", "updated_at": datetime.now(IST)}}
     )
     return True, tx["user_id"]
 
@@ -220,7 +230,7 @@ def reject_redeem(tx_id):
     # Update transaction status
     transactions_col.update_one(
         {"_id": ObjectId(tx_id)},
-        {"$set": {"status": "rejected", "updated_at": datetime.now(timezone.utc)}}
+        {"$set": {"status": "rejected", "updated_at": datetime.now(IST)}}
     )
     return True, user_id
 
@@ -242,7 +252,7 @@ def cancel_redeem_by_user(user_id):
     # Mark transaction as rejected/cancelled
     transactions_col.update_one(
         {"_id": tx["_id"]},
-        {"$set": {"status": "rejected", "details.reason": "Cancelled by user", "updated_at": datetime.now(timezone.utc)}}
+        {"$set": {"status": "rejected", "details.reason": "Cancelled by user", "updated_at": datetime.now(IST)}}
     )
     return True, abs(tx["amount"])
 
@@ -282,7 +292,7 @@ def save_match_result(match_id, player_a_data, player_b_data, match_type, winner
         "winner_id": winner_id,  # user_id or 'bot' or 'draw'
         "score_a": score_a,
         "score_b": score_b,
-        "created_at": datetime.now(timezone.utc)
+        "created_at": datetime.now(IST)
     }
     matches_col.insert_one(match_doc)
     
@@ -359,7 +369,7 @@ def update_daily_mission_progress(user_id, matches_played=0, balance_added=0.0, 
     if not user:
         return
         
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
     
     # Initialize daily missions if date is outdated
     dm = user.get("daily_missions", {})
@@ -394,7 +404,7 @@ def claim_daily_mission(user_id, mission_key):
         return False, "User not found"
         
     dm = user.get("daily_missions", {})
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
     if dm.get("date") != today_str:
         return False, "Mission progress not found for today"
         
@@ -438,24 +448,21 @@ def claim_daily_streak(user_id):
     if not user:
         return False, "User not found"
         
-    now = datetime.now(timezone.utc)
+    now = datetime.now(IST)
     last_claim = user.get("last_streak_claim")
     streak = user.get("streak", 0)
     
     if last_claim:
-        # Convert to same timezone
-        if last_claim.tzinfo is None:
-            last_claim = last_claim.replace(tzinfo=timezone.utc)
-            
-        time_diff = now - last_claim
+        last_claim_ist = to_ist(last_claim)
+        time_diff = now - last_claim_ist
         
-        # If claimed on the same calendar day (UTC)
-        if last_claim.strftime("%Y-%m-%d") == now.strftime("%Y-%m-%d"):
+        # If claimed on the same calendar day (IST)
+        if last_claim_ist.strftime("%Y-%m-%d") == now.strftime("%Y-%m-%d"):
             return False, "Already claimed today's reward"
             
-        # If claimed yesterday (UTC), increment streak. Else reset to 1
+        # If claimed yesterday (IST), increment streak. Else reset to 1
         yesterday = now - timedelta(days=1)
-        if last_claim.strftime("%Y-%m-%d") == yesterday.strftime("%Y-%m-%d"):
+        if last_claim_ist.strftime("%Y-%m-%d") == yesterday.strftime("%Y-%m-%d"):
             streak = (streak % 7) + 1
         else:
             streak = 1

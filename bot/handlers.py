@@ -1,6 +1,16 @@
 import re
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# Indian Standard Time (IST)
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def to_ist(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST)
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
@@ -382,8 +392,7 @@ async def trigger_task(client: Client, user_id, callback_query: CallbackQuery = 
     # Display task details
     remaining_minutes = 20
     if msg_status == "existing":
-        from datetime import datetime, timezone
-        rem_sec = (task["expires_at"].replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)).total_seconds()
+        rem_sec = (to_ist(task["expires_at"]) - datetime.now(IST)).total_seconds()
         remaining_minutes = int(rem_sec // 60)
         
     instructions = (
@@ -577,7 +586,7 @@ async def user_text_handler(client: Client, message: Message):
             from database import transactions_col
             tx = transactions_col.find_one_and_update(
                 {"user_id": user_id, "status": "pending", "type": "redeem", "details.upi_or_mobile": {"$exists": False}},
-                {"$set": {"details.upi_or_mobile": text, "updated_at": datetime.now(timezone.utc)}},
+                {"$set": {"details.upi_or_mobile": text, "updated_at": datetime.now(IST)}},
                 sort=[("created_at", -1)]
             )
             
@@ -680,7 +689,7 @@ async def admin_pending_dep_callback(client: Client, query: CallbackQuery):
         f"User ID: `{tx['user_id']}`\n"
         f"Amount: **Rs {tx['amount']}**\n"
         f"Txn ID: `{tx['details'].get('txn_id')}`\n"
-        f"Requested: {tx['created_at'].strftime('%Y-%m-%d %H:%M:%S')}"
+        f"Requested: {to_ist(tx['created_at']).strftime('%Y-%m-%d %H:%M:%S')}"
     )
     await query.edit_message_text(text, reply_markup=get_admin_action_keyboard(str(tx["_id"]), "deposit"))
 
@@ -706,7 +715,7 @@ async def admin_pending_red_callback(client: Client, query: CallbackQuery):
         f"User ID: `{tx['user_id']}`\n"
         f"Pack Amount: **Rs {abs(tx['amount'])}**\n"
         f"UPI ID / Mobile: `{tx['details'].get('upi_or_mobile')}`\n"
-        f"Requested: {tx['created_at'].strftime('%Y-%m-%d %H:%M:%S')}"
+        f"Requested: {to_ist(tx['created_at']).strftime('%Y-%m-%d %H:%M:%S')}"
     )
     await query.edit_message_text(text, reply_markup=get_admin_action_keyboard(str(tx["_id"]), "redeem"))
 

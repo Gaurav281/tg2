@@ -1,6 +1,9 @@
 import random
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# Indian Standard Time (IST)
+IST = timezone(timedelta(hours=5, minutes=30))
 
 class HandCricketMatch:
     def __init__(self, match_id=None, player_a_id=None, player_a_name=None, player_b_id=None, player_b_name=None, match_type="free"):
@@ -42,7 +45,7 @@ class HandCricketMatch:
         self.toss_choice_pending = True
         
         self.winner_id = None
-        self.created_at = datetime.now(timezone.utc)
+        self.created_at = datetime.now(IST)
         self.rematch_requests = []
         self.ball_results_a = []  # visual score for each ball (e.g. '4', 'OUT', '')
         self.ball_results_b = []
