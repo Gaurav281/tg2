@@ -354,6 +354,7 @@ def get_user_rank(user_id):
 
 def update_daily_mission_progress(user_id, matches_played=0, balance_added=0.0, max_score=0):
     """Update progress metrics for daily missions."""
+    user_id = int(user_id)
     user = get_user(user_id)
     if not user:
         return
@@ -387,6 +388,7 @@ def update_daily_mission_progress(user_id, matches_played=0, balance_added=0.0, 
 
 def claim_daily_mission(user_id, mission_key):
     """Claim reward for a completed daily mission."""
+    user_id = int(user_id)
     user = get_user(user_id)
     if not user:
         return False, "User not found"
@@ -431,6 +433,7 @@ def claim_daily_mission(user_id, mission_key):
 
 def claim_daily_streak(user_id):
     """Claim daily streak reward."""
+    user_id = int(user_id)
     user = get_user(user_id)
     if not user:
         return False, "User not found"
@@ -487,6 +490,7 @@ def claim_daily_streak(user_id):
 
 def claim_referral_reward(user_id, tier):
     """Claim reward for milestone invite referrals."""
+    user_id = int(user_id)
     user = get_user(user_id)
     if not user:
         return False, "User not found"

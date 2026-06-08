@@ -110,7 +110,12 @@ class TestHandCricketGame(unittest.TestCase):
         # Verify that bot's choice was populated and ball was processed
         self.assertIsNone(match.player_a["current_choice"])
         self.assertIsNone(match.player_b["current_choice"])
-        self.assertEqual(match.current_ball, 1)
+        
+        # It could either progress to ball 1 of inning 1, or if they got OUT, transition to inning 2 ball 0
+        self.assertTrue(
+            (match.current_inning == 1 and match.current_ball == 1) or
+            (match.current_inning == 2 and match.current_ball == 0)
+        )
 
 if __name__ == "__main__":
     unittest.main()

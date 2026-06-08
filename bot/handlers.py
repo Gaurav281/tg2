@@ -462,6 +462,9 @@ async def btn_challenge_callback(client: Client, query: CallbackQuery):
 # --- CAPTURE USER TEXT MESSAGES (States: deposits, withdrawals, etc.) ---
 @bot.on_message(filters.text & filters.private)
 async def user_text_handler(client: Client, message: Message):
+    if message.outgoing or (message.text and message.text.startswith("/")):
+        return
+        
     user_id = message.from_user.id
     text = message.text.strip()
     
