@@ -1,0 +1,10 @@
+flask
+flask-socketio
+pymongo
+redis
+pyrogram
+tgcrypto
+requests
+python-dotenv
+eventlet
+python-telegram-bot

@@ -1,0 +1,710 @@
+import asyncio
+bot_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(bot_loop)
+
+import os
+import threading
+import time
+import random
+import sys
+import signal
+from datetime import datetime, timezone
+from flask import Flask, request, jsonify, redirect, render_template_string
+from flask_socketio import SocketIO, emit, join_room, leave_room
+from pyrogram import Client
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+from config import Config
+from database import (
+    get_user, create_user, update_balance, get_transaction_history,
+    get_match_history, get_leaderboard, get_user_rank, claim_daily_streak,
+    claim_daily_mission, claim_referral_reward, save_match_result
+)
+from matchmaking import matchmaker
+from game import HandCricketMatch
+from tasks.shortener import verify_and_reward_task, get_bot_username
+from bot.client import bot as bot_client
+import bot.handlers  # Register Telegram commands and callback query handlers at startup
+
+# Signal handler for clean exit on Ctrl+C (SIGINT/SIGTERM) in the main thread
+def signal_handler(sig, frame):
+    print("\nShutting down Hand Cricket Arena...")
+    try:
+        # Schedule the stop coroutine on the running background event loop cleanly
+        future = asyncio.run_coroutine_threadsafe(bot_client.stop(), bot_loop)
+        future.result(timeout=3.0)
+    except Exception:
+        pass
+    os._exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+# Initialize Flask and SocketIO
+app = Flask(__name__)
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "hand_cricket_secret_key_13579")
+
+# Enable CORS for React Frontend deployment (Vercel)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+
+# Track connected users: user_id (int) -> socket_id (str)
+connected_users = {}
+# Track active matchmaking timers: user_id -> Timer
+matchmaking_timers = {}
+# Track active ball timers: match_id -> Timer
+ball_timers = {}
+# Track active offline timers: user_id -> Timer
+offline_timers = {}
+
+def get_active_users_count():
+    """Returns number of active human users connected via sockets."""
+    return len(connected_users)
+
+# --- HTTP ROUTING API ENDPOINTS ---
+
+@app.route("/")
+def home_index():
+    return jsonify({"status": "healthy", "service": "Hand Cricket Backend"}), 200
+
+@app.route("/verify-task/<task_id>", methods=["GET"])
+def verify_task_route(task_id):
+    """Callback route from AroLinks. Verifies task and rewards player."""
+    success, result = verify_and_reward_task(task_id)
+    bot_uname = get_bot_username()
+    
+    if success:
+        # Notify user on Telegram about task reward
+        try:
+            bot_client.send_message(
+                result,  # result is user_id
+                "🎉 **Task Verified!**\n\n"
+                "Your wallet has been credited with **Rs 0.60**."
+            )
+        except Exception:
+            pass
+        # Redirect back to bot start page with success flag
+        return redirect(f"https://t.me/{bot_uname}?start=task_done")
+    else:
+        # Return elegant error page
+        html = f"""
+        <html>
+            <head>
+                <title>Task Verification Failed</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                    body {{ font-family: -apple-system, sans-serif; background: #0f172a; color: #f8fafc; text-align: center; padding: 50px 20px; }}
+                    .card {{ background: #1e293b; border-radius: 12px; padding: 30px; max-width: 400px; margin: 0 auto; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }}
+                    h2 {{ color: #ef4444; }}
+                    a {{ display: inline-block; margin-top: 20px; background: #3b82f6; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; }}
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h2>❌ Task Failed</h2>
+                    <p>{result}</p>
+                    <p>The link might have expired or has already been used.</p>
+                    <a href="https://t.me/{bot_uname}">Back to Bot</a>
+                </div>
+            </body>
+        </html>
+        """
+        return render_template_string(html), 400
+
+@app.route("/api/user/<user_id>", methods=["GET"])
+def get_user_api(user_id):
+    """Retrieve user details for React Web App store."""
+    user = get_user(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    
+    # Calculate active user count (online socket connections + some fake activity if needed)
+    active_count = get_active_users_count()
+    if active_count < 3:
+        active_count += 5 # show baseline active users count for engagement
+        
+    return jsonify({
+        "user": {
+            "user_id": user.get("_id"),
+            "username": user.get("username", ""),
+            "first_name": user.get("first_name", ""),
+            "balance": round(user.get("balance", 0.0), 2),
+            "streak": user.get("streak", 0),
+            "last_streak_claim": user.get("last_streak_claim").isoformat() if user.get("last_streak_claim") else None,
+            "referrals_count": user.get("referrals_count", 0),
+            "referral_claimed": user.get("referral_claimed", []),
+            "daily_missions": user.get("daily_missions", {}),
+            "is_banned": user.get("is_banned", False)
+        },
+        "active_users": active_count
+    }), 200
+
+@app.route("/api/leaderboard/<user_id>", methods=["GET"])
+def get_leaderboard_api(user_id):
+    """Retrieve top 3 and current user rank."""
+    leaderboard = get_leaderboard()
+    user_rank = get_user_rank(user_id)
+    return jsonify({
+        "leaderboard": leaderboard,
+        "user_rank": user_rank
+    }), 200
+
+@app.route("/api/history/<user_id>", methods=["GET"])
+def get_history_api(user_id):
+    """Retrieve transaction and match logs."""
+    tx_history = get_transaction_history(user_id)
+    match_history = get_match_history(user_id)
+    
+    # Format BSON ObjectId and datetime
+    formatted_txs = []
+    for tx in tx_history:
+        formatted_txs.append({
+            "id": str(tx["_id"]),
+            "type": tx["type"],
+            "amount": tx["amount"],
+            "status": tx["status"],
+            "details": tx.get("details", {}),
+            "created_at": tx["created_at"].isoformat()
+        })
+        
+    formatted_matches = []
+    for m in match_history:
+        formatted_matches.append({
+            "id": m["_id"],
+            "player_a": m["player_a"],
+            "player_b": m["player_b"],
+            "type": m["type"],
+            "winner_id": m["winner_id"],
+            "score_a": m["score_a"],
+            "score_b": m["score_b"],
+            "created_at": m["created_at"].isoformat()
+        })
+        
+    return jsonify({
+        "transactions": formatted_txs,
+        "matches": formatted_matches
+    }), 200
+
+@app.route("/api/claim-streak/<user_id>", methods=["POST"])
+def claim_streak_api(user_id):
+    success, res = claim_daily_streak(user_id)
+    if success:
+        return jsonify({"success": True, "streak": res["streak"], "reward": res["reward"]}), 200
+    else:
+        return jsonify({"success": False, "error": res}), 400
+
+@app.route("/api/claim-mission/<user_id>", methods=["POST"])
+def claim_mission_api(user_id):
+    data = request.json or {}
+    mission_key = data.get("mission_key")
+    if not mission_key:
+        return jsonify({"error": "Missing mission_key"}), 400
+        
+    success, res = claim_daily_mission(user_id, mission_key)
+    if success:
+        return jsonify({"success": True, "reward": res}), 200
+    else:
+        return jsonify({"success": False, "error": res}), 400
+
+@app.route("/api/claim-referral/<user_id>", methods=["POST"])
+def claim_referral_api(user_id):
+    data = request.json or {}
+    tier = data.get("tier")
+    if not tier:
+        return jsonify({"error": "Missing tier"}), 400
+        
+    success, res = claim_referral_reward(user_id, str(tier))
+    if success:
+        return jsonify({"success": True, "reward": res}), 200
+    else:
+        return jsonify({"success": False, "error": res}), 400
+
+
+# --- SOCKET.IO EVENT HANDLERS ---
+
+@socketio.on("connect")
+def handle_connect():
+    # Pass user_id via query parameters: socket.connect({query: "userId=123"})
+    user_id = request.args.get("userId")
+    if user_id:
+        try:
+            uid = int(user_id)
+            connected_users[uid] = request.sid
+            
+            # Cancel offline timer if user was in an active match and disconnected
+            if uid in offline_timers:
+                offline_timers[uid].cancel()
+                offline_timers.pop(uid, None)
+                
+            # If user has an active match, join room automatically
+            match_id = matchmaker.user_to_match.get(uid)
+            if match_id:
+                match = matchmaker.get_match(match_id)
+                if match and match.status not in ["completed", "cancelled"]:
+                    join_room(match_id)
+                    # Reset offline status
+                    player = match.get_player(uid)
+                    if player:
+                        player["is_offline"] = False
+                    
+                    # Notify room about rejoin
+                    emit("player_rejoined", {"userId": uid}, to=match_id)
+                    # Resend latest match status
+                    emit("match_update", match.to_dict(), to=request.sid)
+        except ValueError:
+            pass
+
+@socketio.on("disconnect")
+def handle_disconnect():
+    # Find user_id from request.sid
+    uid = None
+    for k, v in list(connected_users.items()):
+        if v == request.sid:
+            uid = k
+            break
+            
+    if uid:
+        connected_users.pop(uid, None)
+        
+        # Remove from matchmaking queue
+        matchmaker.remove_from_queue(uid)
+        
+        # If user was in an active match, start 10s forfeit timer
+        match_id = matchmaker.user_to_match.get(uid)
+        if match_id:
+            match = matchmaker.get_match(match_id)
+            if match and match.status not in ["completed", "cancelled"] and match.type != "free":
+                # Free match doesn't strictly need 10s forfeit if they don't care, but paid matches do
+                player = match.get_player(uid)
+                if player:
+                    player["is_offline"] = True
+                
+                # Notify opponent
+                emit("player_offline", {"userId": uid, "countdown": 10}, to=match_id)
+                
+                # Start timer
+                t = threading.Timer(10.0, run_forfeit_timeout, args=[match_id, uid])
+                offline_timers[uid] = t
+                t.start()
+
+def run_forfeit_timeout(match_id, user_id):
+    """Triggered after 10s offline. Forfeits match in favor of opponent."""
+    match = matchmaker.get_match(match_id)
+    if match and match.status not in ["completed", "cancelled"]:
+        match.handle_player_forfeit(user_id)
+        
+        # Resolve payout
+        process_match_payout(match)
+        
+        # Emit update
+        socketio.emit("match_update", match.to_dict(), to=match_id)
+        matchmaker.clean_completed_match(match_id)
+
+@socketio.on("join_matchmaking")
+def handle_join_matchmaking(data):
+    user_id = int(data["userId"])
+    username = data["username"]
+    
+    # Verify user wallet balance
+    user = get_user(user_id)
+    if not user or user.get("is_banned"):
+        emit("matchmaking_error", {"message": "User is banned or not registered."})
+        return
+        
+    if user.get("balance", 0.0) < 1.0:
+        emit("matchmaking_error", {"message": "Insufficient balance! Paid match requires Rs 1.00."})
+        return
+        
+    # Deduct match fee (Rs 1.00) atomically
+    success, new_bal = update_balance(user_id, -1.0, "match_fee", {"status": "matchmaking"})
+    if not success:
+        emit("matchmaking_error", {"message": "Failed to lock match fee."})
+        return
+        
+    # Add to matchmaking
+    res = matchmaker.add_to_queue(user_id, username, request.sid)
+    
+    if res["status"] == "already_in_match":
+        # Refund fee
+        update_balance(user_id, 1.0, "match_refund", {"reason": "Already in match"})
+        emit("match_update", matchmaker.get_match(res["match_id"]).to_dict())
+        return
+        
+    if res["status"] == "matched":
+        match_id = res["match_id"]
+        join_room(match_id)
+        
+        # Join opponent socket to room
+        opp_sid = res["opponent_socket_id"]
+        socketio.server.enter_room(opp_sid, match_id)
+        
+        # Update match status to matchmaking database if needed (keep in memory)
+        match = matchmaker.get_match(match_id)
+        emit("match_found", match.to_dict(), to=match_id)
+        
+        # Start timer for toss decision
+        start_ball_timer(match_id, match.current_inning, match.current_ball)
+        
+    elif res["status"] == "queued":
+        emit("matchmaking_queued")
+        # Start a thread to check fallback to Bot after 6 seconds
+        t = threading.Timer(6.0, trigger_bot_fallback, args=[user_id])
+        matchmaking_timers[user_id] = t
+        t.start()
+
+def trigger_bot_fallback(user_id):
+    """Triggered after 6s waiting in queue. Matches with bot."""
+    matchmaker_timers = matchmaking_timers.pop(user_id, None)
+    match = matchmaker.check_bot_fallback(user_id)
+    if match:
+        # Join user socket to room
+        sid = connected_users.get(user_id)
+        if sid:
+            socketio.server.enter_room(sid, match.match_id)
+            socketio.emit("match_found", match.to_dict(), to=sid)
+            start_ball_timer(match.match_id, match.current_inning, match.current_ball)
+
+@socketio.on("cancel_matchmaking")
+def handle_cancel_matchmaking(data):
+    user_id = int(data["userId"])
+    
+    # Cancel timer
+    t = matchmaking_timers.pop(user_id, None)
+    if t:
+        t.cancel()
+        
+    # Remove from queue
+    matchmaker.remove_from_queue(user_id)
+    # Refund match fee
+    update_balance(user_id, 1.0, "match_refund", {"reason": "Cancelled by user"})
+    emit("matchmaking_cancelled")
+
+@socketio.on("join_challenge")
+def handle_join_challenge(data):
+    user_id = int(data["userId"])
+    match_id = data["matchId"]
+    
+    match = matchmaker.get_match(match_id)
+    if match:
+        join_room(match_id)
+        emit("match_update", match.to_dict())
+
+@socketio.on("choose_toss_side")
+def handle_choose_toss_side(data):
+    match_id = data["matchId"]
+    user_id = int(data["userId"])
+    choice = data["choice"] # head, tail
+    
+    match = matchmaker.get_match(match_id)
+    if not match:
+        return
+        
+    success, res = match.select_toss_coin(user_id, choice)
+    if success:
+        # Cancel current ball/toss timer
+        cancel_ball_timer(match_id)
+        emit("match_update", match.to_dict(), to=match_id)
+        
+        # If human won toss, start timer for option choice. If bot won toss, it automatically selected batting/bowling
+        if match.status == "toss":
+            # Wait for option selection from toss winner
+            start_ball_timer(match_id, match.current_inning, match.current_ball)
+        else:
+            # Match transitioned to batting_1
+            start_ball_timer(match_id, match.current_inning, match.current_ball)
+
+@socketio.on("choose_toss_option")
+def handle_choose_toss_option(data):
+    match_id = data["matchId"]
+    user_id = int(data["userId"])
+    option = data["choice"] # batting, bowling
+    
+    match = matchmaker.get_match(match_id)
+    if not match:
+        return
+        
+    success, res = match.select_toss_option(user_id, option)
+    if success:
+        cancel_ball_timer(match_id)
+        emit("match_update", match.to_dict(), to=match_id)
+        start_ball_timer(match_id, match.current_inning, match.current_ball)
+
+@socketio.on("submit_choice")
+def handle_submit_choice(data):
+    match_id = data["matchId"]
+    user_id = int(data["userId"])
+    choice = int(data["choice"]) # 1 to 6
+    
+    match = matchmaker.get_match(match_id)
+    if not match:
+        return
+        
+    success, res = match.make_choice(user_id, choice)
+    if success:
+        # Reset 6s timer since choices are resolved
+        if match.player_a["current_choice"] is None and match.player_b["current_choice"] is None:
+            cancel_ball_timer(match_id)
+            
+            emit("match_update", match.to_dict(), to=match_id)
+            
+            if match.status == "completed":
+                # Handle payouts and database updates
+                process_match_payout(match)
+                emit("match_update", match.to_dict(), to=match_id)
+                matchmaker.clean_completed_match(match_id)
+            else:
+                start_ball_timer(match_id, match.current_inning, match.current_ball)
+        else:
+            # Send status update just for choice indicator (user choice made, waiting for opponent)
+            emit("match_update", match.to_dict(), to=match_id)
+
+def process_match_payout(match):
+    """Processes payouts and logs completed match details."""
+    if match.type == "paid":
+        winner_id = match.winner_id
+        
+        # Winner Payout (Rs 1.80)
+        if winner_id not in ["draw", "bot"]:
+            update_balance(winner_id, 1.80, "match_win", {"match_id": match.match_id})
+        elif winner_id == "draw":
+            # Refund both players Rs 1.00
+            if match.player_a["user_id"] != "bot":
+                update_balance(match.player_a["user_id"], 1.00, "match_refund", {"match_id": match.match_id, "reason": "Match Draw"})
+            if match.player_b["user_id"] != "bot":
+                update_balance(match.player_b["user_id"], 1.00, "match_refund", {"match_id": match.match_id, "reason": "Match Draw"})
+                
+        # Save results in Database
+        save_match_result(
+            match_id=match.match_id,
+            player_a_data=match.player_a,
+            player_b_data=match.player_b,
+            match_type="paid",
+            winner_id=winner_id,
+            score_a=match.player_a["score"],
+            score_b=match.player_b["score"]
+        )
+    else:
+        # Free match / Challenge
+        save_match_result(
+            match_id=match.match_id,
+            player_a_data=match.player_a,
+            player_b_data=match.player_b,
+            match_type="challenge",
+            winner_id=match.winner_id,
+            score_a=match.player_a["score"],
+            score_b=match.player_b["score"]
+        )
+
+# --- TIMEOUT BALL TIMERS (6 SECONDS FOR CHOICE) ---
+
+def start_ball_timer(match_id, inning, ball_num):
+    """Initialize a 6-second timer for player choices."""
+    cancel_ball_timer(match_id)
+    t = threading.Timer(6.5, run_ball_timeout, args=[match_id, inning, ball_num])
+    ball_timers[match_id] = t
+    t.start()
+
+def cancel_ball_timer(match_id):
+    t = ball_timers.pop(match_id, None)
+    if t:
+        t.cancel()
+
+def run_ball_timeout(match_id, inning, ball_num):
+    """Runs when 6s choice timer expires."""
+    match = matchmaker.get_match(match_id)
+    if not match or match.status not in ["toss", "batting_1", "batting_2"]:
+        return
+        
+    # Ensure match has not progressed past this ball
+    if match.current_inning != inning or match.current_ball != ball_num:
+        return
+        
+    # Process choice timeout
+    if match.status == "toss":
+        # Toss timeout - auto select for the pending player
+        if match.toss_choice_pending:
+            # Toss selector timed out, pick randomly
+            choice = "head" if match.is_bot_turn_for_toss() else random.choice(["head", "tail"])
+            match.select_toss_coin(match.toss_selector, choice)
+        else:
+            # Toss option selection timed out
+            match.select_toss_option(match.toss_winner, "batting")
+            
+        socketio.emit("match_update", match.to_dict(), to=match_id)
+        start_ball_timer(match_id, match.current_inning, match.current_ball)
+        
+    else:
+        # Batting choice timeout
+        # Handle ball timeouts
+        match.handle_ball_timeout(None)
+        socketio.emit("match_update", match.to_dict(), to=match_id)
+        
+        if match.status == "completed":
+            process_match_payout(match)
+            socketio.emit("match_update", match.to_dict(), to=match_id)
+            matchmaker.clean_completed_match(match_id)
+        else:
+            start_ball_timer(match_id, match.current_inning, match.current_ball)
+
+# --- WEB APP TRIGGERED PORTALS TO BOT CHAT ---
+@socketio.on("request_deposit_from_webapp")
+def handle_request_deposit_from_webapp(data):
+    user_id = int(data["userId"])
+    amount = int(data["amount"])
+    
+    # Import locally to prevent potential import order issues
+    from bot.handlers import user_states, clean_send as bot_clean_send
+    
+    # Store user state waiting for txn ID
+    user_states[user_id] = {"action": "wait_deposit_txn", "amount": amount}
+    
+    # Build instructions & QR
+    upi_uri = f"upi://pay?pa={Config.ADMIN_UPI}&pn=HandCricketAdmin&am={amount}&cu=INR"
+    import urllib.parse
+    encoded_upi = urllib.parse.quote(upi_uri)
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=250x250&data={encoded_upi}"
+    
+    instruction_text = (
+        f"🪙 **Deposit Package: Rs {amount}**\n\n"
+        f"1. Scan the QR code shown below or pay directly to the UPI ID:\n"
+        f"UPI ID: `{Config.ADMIN_UPI}`\n"
+        f"Amount: **Rs {amount}**\n\n"
+        f"2. Complete payment in your UPI app.\n"
+        f"3. Copy the **Transaction ID / Ref No.** and send it here in the chat.\n\n"
+        f"⚖️ *Admin approval is required to credit your account.*"
+        f"<a href=\"{qr_url}\">&#8205;</a>"
+    )
+    
+    # Send message using the Pyrogram loop safely
+    import asyncio
+    async def send_msg():
+        await bot_clean_send(bot_client, user_id, instruction_text, reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="main_menu")
+        ]]))
+        
+    asyncio.run_coroutine_threadsafe(send_msg(), bot_client.loop)
+
+@socketio.on("request_redeem_from_webapp")
+def handle_request_redeem_from_webapp(data):
+    user_id = int(data["userId"])
+    
+    # Import locally
+    from bot.handlers import clean_send as bot_clean_send
+    from bot.keyboards import get_redeem_coin_keyboard
+    
+    user = get_user(user_id)
+    balance = user.get("balance", 0.0) if user else 0.0
+    
+    redeem_text = (
+        f"➖ **Redeem Coins**\n\n"
+        f"Current Wallet Balance: **Rs {balance:.2f}**\n\n"
+        f"Select a redemption package:"
+    )
+    
+    import asyncio
+    async def send_msg():
+        await bot_clean_send(bot_client, user_id, redeem_text, reply_markup=get_redeem_coin_keyboard())
+        
+    asyncio.run_coroutine_threadsafe(send_msg(), bot_client.loop)
+
+# --- REMATCH MECHANISM ---
+@socketio.on("request_rematch")
+def handle_request_rematch(data):
+    match_id = data["matchId"]
+    user_id = int(data["userId"])
+    
+    match = matchmaker.get_match(match_id)
+    if not match or match.status != "completed":
+        return
+        
+    if user_id not in match.rematch_requests:
+        match.rematch_requests.append(user_id)
+        
+    # Check if playing against bot (rematch starts immediately!)
+    if match.player_b["user_id"] == "bot":
+        # Create a new match fee deduction if it is paid
+        if match.type == "paid":
+            user = get_user(user_id)
+            if not user or user["balance"] < 1.0:
+                emit("matchmaking_error", {"message": "Insufficient balance for rematch!"})
+                return
+            update_balance(user_id, -1.0, "match_fee", {"details": "Rematch fee"})
+            
+        new_match = HandCricketMatch(
+            player_a_id=user_id,
+            player_a_name=match.player_a["username"] if match.player_a["user_id"] == user_id else match.player_b["username"],
+            player_b_id="bot",
+            player_b_name="Smart Bot",
+            match_type=match.type
+        )
+        matchmaker.active_matches[new_match.match_id] = new_match
+        matchmaker.user_to_match[user_id] = new_match.match_id
+        
+        emit("rematch_started", new_match.to_dict(), to=request.sid)
+        start_ball_timer(new_match.match_id, new_match.current_inning, new_match.current_ball)
+        return
+
+    # If two humans
+    if len(match.rematch_requests) == 2:
+        # Swap host and guest
+        host_id = match.player_a["user_id"]
+        guest_id = match.player_b["user_id"]
+        
+        # Deduct fees if paid match
+        if match.type == "paid":
+            for u_id in [host_id, guest_id]:
+                user = get_user(u_id)
+                if not user or user["balance"] < 1.0:
+                    # Cancel rematch
+                    socketio.emit("rematch_failed", {"message": "One of the players has insufficient balance."}, to=match_id)
+                    return
+            update_balance(host_id, -1.0, "match_fee", {"details": "Rematch fee"})
+            update_balance(guest_id, -1.0, "match_fee", {"details": "Rematch fee"})
+
+        new_match = HandCricketMatch(
+            player_a_id=guest_id,  # Swap roles
+            player_a_name=match.player_b["username"],
+            player_b_id=host_id,
+            player_b_name=match.player_a["username"],
+            match_type=match.type
+        )
+        matchmaker.active_matches[new_match.match_id] = new_match
+        matchmaker.user_to_match[host_id] = new_match.match_id
+        matchmaker.user_to_match[guest_id] = new_match.match_id
+        
+        socketio.emit("rematch_started", new_match.to_dict(), to=match_id)
+        start_ball_timer(new_match.match_id, new_match.current_inning, new_match.current_ball)
+    else:
+        # Notify opponent of request
+        opp = match.get_opponent(user_id)
+        if opp and opp["user_id"] != "bot":
+            opp_sid = connected_users.get(opp["user_id"])
+            if opp_sid:
+                socketio.emit("rematch_requested", {"userId": user_id}, to=opp_sid)
+
+
+# --- LAUNCH BOT CLIENT IN BACKGROUND THREAD ---
+def run_bot():
+    """Start Pyrogram bot loop without signal registration in secondary threads."""
+    import asyncio
+    print("Starting Telegram Bot loop...")
+    asyncio.set_event_loop(bot_loop)
+    
+    # Call start() directly. Pyrogram runs the coroutine internally on the set event loop.
+    bot_client.start()
+    
+    try:
+        bot_loop.run_forever()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        bot_client.stop()
+
+if __name__ == "__main__":
+    # Start Telegram Bot in a separate daemon thread
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
+    # Start Flask Webserver + SocketIO
+    port = Config.PORT
+    print(f"Starting Flask-SocketIO server on port {port}...")
+    socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
