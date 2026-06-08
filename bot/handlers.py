@@ -371,9 +371,8 @@ async def trigger_task(client: Client, user_id, callback_query: CallbackQuery = 
     
     if msg_status == "limit_reached":
         err_msg = (
-            "❌ **Daily Limit Reached!**\n\n"
-            "You cannot complete more tasks today. 3 of your tasks expired without completion today.\n"
-            "Please try again tomorrow!"
+            "❌ **0 task remaining**\n\n"
+            "4 tasks will be available tomorrow."
         )
         if callback_query:
             await callback_query.edit_message_text(
@@ -389,21 +388,13 @@ async def trigger_task(client: Client, user_id, callback_query: CallbackQuery = 
             )
         return
         
-    # Display task details
-    remaining_minutes = 20
-    if msg_status == "existing":
-        rem_sec = (to_ist(task["expires_at"]) - datetime.now(IST)).total_seconds()
-        remaining_minutes = int(rem_sec // 60)
-        
     instructions = (
-        f"💰 **Earn Rs 0.60 per Task!**\n\n"
-        f"You can do as many tasks as you want to earn unlimited wallet coins!\n\n"
+        f"💰 **Earn Rs 0.50 per Task!**\n\n"
+        f"Complete shortener tasks to earn wallet coins! You can do up to 4 tasks daily.\n\n"
         f"📝 **Instructions:**\n"
         f"1. Click the **Open Task** button below.\n"
         f"2. You will be redirected to the shortener link. Complete the validation steps.\n"
-        f"3. Once finished, you will automatically be redirected back to the bot, and Rs 0.60 will be credited.\n\n"
-        f"⏳ **Link Expiration:** {remaining_minutes} minutes remaining.\n"
-        f"⚠️ *Failure to complete the link before it expires counts towards your 3 daily expirations limit.*"
+        f"3. Once finished, you will automatically be redirected back to the bot, and Rs 0.50 will be credited.\n"
     )
     
     keyboard = InlineKeyboardMarkup([

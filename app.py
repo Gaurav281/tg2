@@ -18,7 +18,7 @@ from config import Config
 from database import (
     get_user, create_user, update_balance, get_transaction_history,
     get_match_history, get_leaderboard, get_user_rank, claim_daily_streak,
-    claim_daily_mission, claim_referral_reward, save_match_result
+    claim_daily_mission, claim_referral_reward, save_match_result, tasks_col
 )
 from matchmaking import matchmaker
 from game import HandCricketMatch
@@ -80,7 +80,7 @@ def verify_task_route(task_id):
             bot_client.send_message(
                 result,  # result is user_id
                 "🎉 **Task Verified!**\n\n"
-                "Your wallet has been credited with **Rs 0.60**."
+                "Your wallet has been credited with **Rs 0.50**."
             )
         except Exception:
             pass
@@ -133,6 +133,16 @@ def get_user_api(user_id):
     if active_count < 3:
         active_count += 5 # show baseline active users count for engagement
         
+    from datetime import datetime, timezone, timedelta
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(IST)
+    start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    completed_today = tasks_col.count_documents({
+        "user_id": int(user_id),
+        "status": "completed",
+        "completed_at": {"$gte": start_of_today}
+    })
+        
     return jsonify({
         "user": {
             "user_id": user.get("_id"),
@@ -144,7 +154,8 @@ def get_user_api(user_id):
             "referrals_count": user.get("referrals_count", 0),
             "referral_claimed": user.get("referral_claimed", []),
             "daily_missions": user.get("daily_missions", {}),
-            "is_banned": user.get("is_banned", False)
+            "is_banned": user.get("is_banned", False),
+            "tasks_completed_today": completed_today
         },
         "active_users": active_count
     }), 200
