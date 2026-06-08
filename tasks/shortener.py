@@ -16,7 +16,7 @@ def get_backend_url():
 def get_bot_username():
     # We can get this from config, or use a default
     import os
-    return os.getenv("BOT_USERNAME", "hand_cricket_play_bot")
+    return os.getenv("BOT_USERNAME", "buckky_bot")
 
 def check_and_update_expired_tasks(user_id):
     """
