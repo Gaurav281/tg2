@@ -115,7 +115,16 @@ def get_user_api(user_id):
     """Retrieve user details for React Web App store."""
     user = get_user(user_id)
     if not user:
-        return jsonify({"error": "User not found"}), 404
+        username = request.args.get("username")
+        first_name = request.args.get("first_name") or request.args.get("firstName")
+        if username or first_name:
+            try:
+                user = create_user(user_id, username, first_name)
+            except Exception as e:
+                print(f"Error auto-registering user {user_id}: {e}")
+        
+        if not user:
+            return jsonify({"error": "User not found"}), 404
     
     # Calculate active user count (online socket connections + some fake activity if needed)
     active_count = get_active_users_count()

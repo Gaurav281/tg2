@@ -824,7 +824,7 @@ async def admin_action_callback(client: Client, query: CallbackQuery):
     await query.edit_message_text("⚙️ **Admin Panel**\n\nSelect control action:", reply_markup=get_admin_keyboard())
 
 # --- BALANCE MANIPULATION VIA DIRECT COMMANDS ---
-@bot.on_message(filters.command("addbalance") & filters.private)
+@bot.on_message(filters.command(["addbalance", "addcoins"]) & filters.private)
 async def addbalance_handler(client: Client, message: Message):
     user_id = message.from_user.id
     await clean_user_history(client, user_id, message.id)
@@ -834,6 +834,8 @@ async def addbalance_handler(client: Client, message: Message):
     # Check if there are arguments
     if len(message.command) > 2:
         user_identifier = message.command[1]
+        if user_identifier.startswith("@"):
+            user_identifier = user_identifier[1:]
         amount = float(message.command[2])
         
         # Resolve target user
@@ -873,13 +875,13 @@ async def addbalance_handler(client: Client, message: Message):
     await clean_send(
         client,
         user_id,
-        f"➕ **Add Balance**\n\n"
+        f"➕ **Add Balance / Coins**\n\n"
         f"**Active Unbanned Users:**\n{user_list}\n\n"
         f"👉 Please type: `<username_or_userid> <amount_to_add>`",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")]])
     )
 
-@bot.on_message(filters.command("removebalance") & filters.private)
+@bot.on_message(filters.command(["removebalance", "removecoins"]) & filters.private)
 async def removebalance_handler(client: Client, message: Message):
     user_id = message.from_user.id
     await clean_user_history(client, user_id, message.id)
@@ -889,6 +891,8 @@ async def removebalance_handler(client: Client, message: Message):
     # Check if there are arguments
     if len(message.command) > 2:
         user_identifier = message.command[1]
+        if user_identifier.startswith("@"):
+            user_identifier = user_identifier[1:]
         amount = float(message.command[2])
         
         # Resolve target user
@@ -927,7 +931,7 @@ async def removebalance_handler(client: Client, message: Message):
     await clean_send(
         client,
         user_id,
-        f"➖ **Remove Balance**\n\n"
+        f"➖ **Remove Balance / Coins**\n\n"
         f"**Active Unbanned Users:**\n{user_list}\n\n"
         f"👉 Please type: `<username_or_userid> <amount_to_remove>`",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")]])
@@ -946,6 +950,8 @@ async def ban_handler(client: Client, message: Message):
         return
         
     user_identifier = message.command[1]
+    if user_identifier.startswith("@"):
+        user_identifier = user_identifier[1:]
     
     target_user = None
     try:
@@ -976,6 +982,8 @@ async def unban_handler(client: Client, message: Message):
         return
         
     user_identifier = message.command[1]
+    if user_identifier.startswith("@"):
+        user_identifier = user_identifier[1:]
     
     target_user = None
     try:
