@@ -133,7 +133,7 @@ class Matchmaker:
         guest_id = int(guest_id)
         challenge_code = str(challenge_code).strip()
         with self.lock:
-            # Find the active waiting match with this code
+             # Find the active waiting match with this code
             match = None
             for m in self.active_matches.values():
                 if m.challenge_code == challenge_code and m.status == "waiting":
