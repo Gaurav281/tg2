@@ -44,7 +44,10 @@ def create_or_get_task(user_id):
     })
     
     if ongoing_task:
-        return ongoing_task, "existing"
+        if "mock-" in ongoing_task.get("shortened_url", ""):
+            tasks_col.update_one({"_id": ongoing_task["_id"]}, {"$set": {"status": "expired"}})
+        else:
+            return ongoing_task, "existing"
         
     # 3. Create a new task.
     # First 2 links: arolinks

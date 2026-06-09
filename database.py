@@ -279,7 +279,8 @@ def get_match_history(user_id, limit=20):
         "$or": [
             {"player_a.user_id": int(user_id)},
             {"player_b.user_id": int(user_id)}
-        ]
+        ],
+        "type": {"$ne": "challenge"}
     }).sort("created_at", -1).limit(limit))
 
 def save_match_result(match_id, player_a_data, player_b_data, match_type, winner_id, score_a, score_b):

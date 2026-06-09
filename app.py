@@ -176,6 +176,7 @@ def get_history_api(user_id):
     tx_history = get_transaction_history(user_id)
     match_history = get_match_history(user_id)
     
+    from database import to_ist
     # Format BSON ObjectId and datetime
     formatted_txs = []
     for tx in tx_history:
@@ -185,7 +186,7 @@ def get_history_api(user_id):
             "amount": tx["amount"],
             "status": tx["status"],
             "details": tx.get("details", {}),
-            "created_at": tx["created_at"].isoformat()
+            "created_at": to_ist(tx["created_at"]).isoformat()
         })
         
     formatted_matches = []
@@ -198,7 +199,7 @@ def get_history_api(user_id):
             "winner_id": m["winner_id"],
             "score_a": m["score_a"],
             "score_b": m["score_b"],
-            "created_at": m["created_at"].isoformat()
+            "created_at": to_ist(m["created_at"]).isoformat()
         })
         
     return jsonify({
@@ -410,6 +411,24 @@ def handle_join_challenge(data):
         join_room(match_id)
         emit("match_update", match.to_dict())
 
+@socketio.on("create_challenge_match")
+def handle_create_challenge_match(data):
+    user_id = int(data["userId"])
+    username = data["username"]
+    
+    match = matchmaker.create_challenge_match(user_id, username)
+    join_room(match.match_id)
+    emit("match_update", match.to_dict())
+
+@socketio.on("cancel_challenge_match")
+def handle_cancel_challenge_match(data):
+    match_id = data["matchId"]
+    match = matchmaker.get_match(match_id)
+    if match and match.status == "waiting":
+        match.status = "cancelled"
+        socketio.emit("match_update", match.to_dict(), to=match_id)
+        matchmaker.clean_completed_match(match_id)
+
 @socketio.on("choose_toss_side")
 def handle_choose_toss_side(data):
     match_id = data["matchId"]
@@ -519,9 +538,9 @@ def process_match_payout(match):
 # --- TIMEOUT BALL TIMERS (6 SECONDS FOR CHOICE) ---
 
 def start_ball_timer(match_id, inning, ball_num):
-    """Initialize a 6-second timer for player choices."""
+    """Initialize a 10-second timer for player choices plus 2s delay and grace."""
     cancel_ball_timer(match_id)
-    t = threading.Timer(6.5, run_ball_timeout, args=[match_id, inning, ball_num])
+    t = threading.Timer(12.5, run_ball_timeout, args=[match_id, inning, ball_num])
     ball_timers[match_id] = t
     t.start()
 

@@ -453,7 +453,9 @@ async def btn_challenge_callback(client: Client, query: CallbackQuery):
         f"⌛ *Waiting for friend to join...*"
     )
     share_url = f"https://t.me/share/url?url={urllib.parse.quote(challenge_link)}&text={urllib.parse.quote('I challenge you to a Hand Cricket match! Click to join! ⚔️')}"
+    web_url = f"{Config.WEB_APP_URL}?userId={user_id}"
     keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎮 Open Match", web_app=WebAppInfo(url=web_url))],
         [InlineKeyboardButton("⚔️ Share Challenge Link", url=share_url)],
         [InlineKeyboardButton("↩️ Back to Menu", callback_data="main_menu")]
     ])
@@ -680,7 +682,7 @@ async def admin_pending_dep_callback(client: Client, query: CallbackQuery):
         f"User ID: `{tx['user_id']}`\n"
         f"Amount: **Rs {tx['amount']}**\n"
         f"Txn ID: `{tx['details'].get('txn_id')}`\n"
-        f"Requested: {to_ist(tx['created_at']).strftime('%Y-%m-%d %H:%M:%S')}"
+        f"Requested: {to_ist(tx['created_at']).strftime('%Y-%m-%d %I:%M:%S %p')}"
     )
     await query.edit_message_text(text, reply_markup=get_admin_action_keyboard(str(tx["_id"]), "deposit"))
 
@@ -706,7 +708,7 @@ async def admin_pending_red_callback(client: Client, query: CallbackQuery):
         f"User ID: `{tx['user_id']}`\n"
         f"Pack Amount: **Rs {abs(tx['amount'])}**\n"
         f"UPI ID / Mobile: `{tx['details'].get('upi_or_mobile')}`\n"
-        f"Requested: {to_ist(tx['created_at']).strftime('%Y-%m-%d %H:%M:%S')}"
+        f"Requested: {to_ist(tx['created_at']).strftime('%Y-%m-%d %I:%M:%S %p')}"
     )
     await query.edit_message_text(text, reply_markup=get_admin_action_keyboard(str(tx["_id"]), "redeem"))
 
