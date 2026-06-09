@@ -112,11 +112,52 @@ class Matchmaker:
                 player_b_name="Waiting...",
                 match_type=match_type
             )
+            # Generate unique 6-digit challenge code
+            attempts = 0
+            while attempts < 100:
+                code = f"{random.randint(100000, 999999)}"
+                code_exists = any(m.challenge_code == code and m.status == "waiting" for m in self.active_matches.values())
+                if not code_exists:
+                    match.challenge_code = code
+                    break
+                attempts += 1
+                
             # Set status to waiting for opponent
             match.status = "waiting"
             self.active_matches[match.match_id] = match
             self.user_to_match[host_id] = match.match_id
             return match
+
+    def join_challenge_by_code(self, challenge_code, guest_id, guest_name):
+        """Guest joins a pending challenge match using 6-digit code."""
+        guest_id = int(guest_id)
+        challenge_code = str(challenge_code).strip()
+        with self.lock:
+            # Find the active waiting match with this code
+            match = None
+            for m in self.active_matches.values():
+                if m.challenge_code == challenge_code and m.status == "waiting":
+                    match = m
+                    break
+                    
+            if not match:
+                return None, "Challenge code not found or already started"
+                
+            if match.player_a["user_id"] == guest_id:
+                return None, "You cannot challenge yourself"
+                
+            # Populate player_b details
+            match.player_b["user_id"] = guest_id
+            match.player_b["username"] = guest_name
+            match.player_b["status"] = None
+            
+            # Change status to toss
+            match.status = "toss"
+            match.toss_selector = random.choice([match.player_a["user_id"], match.player_b["user_id"]])
+            match.toss_choice_pending = True
+            
+            self.user_to_match[guest_id] = match.match_id
+            return match, None
 
     def join_challenge_match(self, match_id, guest_id, guest_name):
         """Guest joins a pending challenge match."""

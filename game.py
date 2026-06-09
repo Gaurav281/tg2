@@ -9,6 +9,7 @@ class HandCricketMatch:
     def __init__(self, match_id=None, player_a_id=None, player_a_name=None, player_b_id=None, player_b_name=None, match_type="free"):
         self.match_id = match_id or str(uuid.uuid4())
         self.type = match_type  # paid, free, challenge
+        self.challenge_code = None
         
         self.player_a = {
             "user_id": int(player_a_id) if (player_a_id is not None and player_a_id != "bot") else player_a_id,
@@ -374,6 +375,7 @@ class HandCricketMatch:
         return {
             "match_id": self.match_id,
             "type": self.type,
+            "challenge_code": self.challenge_code,
             "player_a": self.player_a,
             "player_b": self.player_b,
             "status": self.status,

@@ -140,11 +140,12 @@ async def start_handler(client: Client, message: Message):
                 else:
                     # Notify Socket.IO room and start timer
                     try:
-                        from app import socketio, start_ball_timer
-                        socketio.emit("match_update", match.to_dict(), to=match.match_id)
-                        start_ball_timer(match.match_id, match.current_inning, match.current_ball)
+                        if hasattr(matchmaker, "socketio") and matchmaker.socketio:
+                            matchmaker.socketio.emit("match_update", match.to_dict(), to=match.match_id)
+                        if hasattr(matchmaker, "start_ball_timer") and matchmaker.start_ball_timer:
+                            matchmaker.start_ball_timer(match.match_id, match.current_inning, match.current_ball)
                     except Exception as e:
-                        print(f"Error starting challenge via socket: {e}")
+                        print(f"Error starting challenge via matchmaker: {e}")
                         
                     # Notify host
                     try:

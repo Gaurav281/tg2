@@ -273,6 +273,8 @@ def handle_connect():
                     emit("player_rejoined", {"userId": uid}, to=match_id)
                     # Resend latest match status to the entire room to sync online state
                     socketio.emit("match_update", match.to_dict(), to=match_id)
+                    # Also send directly to the connecting client's session ID to guarantee update
+                    emit("match_update", match.to_dict(), to=request.sid)
         except ValueError:
             pass
 
@@ -549,6 +551,10 @@ def cancel_ball_timer(match_id):
     if t:
         t.cancel()
 
+# Dynamic bindings to resolve circular imports
+matchmaker.socketio = socketio
+matchmaker.start_ball_timer = start_ball_timer
+
 def run_ball_timeout(match_id, inning, ball_num):
     """Runs when 6s choice timer expires."""
     match = matchmaker.get_match(match_id)
@@ -646,6 +652,195 @@ def handle_request_redeem_from_webapp(data):
         await bot_clean_send(bot_client, user_id, redeem_text, reply_markup=get_redeem_coin_keyboard())
         
     asyncio.run_coroutine_threadsafe(send_msg(), bot_client.loop)
+
+# --- WEB APP IN-APP DEPOSIT & REDEEM AND CHALLENGE BY CODE AND FREE BOT MATCH ---
+
+@socketio.on("submit_deposit_from_webapp")
+def handle_submit_deposit_from_webapp(data):
+    user_id = int(data["userId"])
+    amount = int(data["amount"])
+    upi_txn_id = data["upiTxnId"].strip()
+    
+    if not upi_txn_id:
+        return {"status": "error", "message": "UPI Transaction ID is required."}
+        
+    from database import create_transaction, get_user
+    tx_id = create_transaction(
+        user_id=user_id,
+        tx_type="deposit",
+        amount=amount,
+        status="pending",
+        details={"txn_id": upi_txn_id}
+    )
+    
+    # Notify Admin
+    user = get_user(user_id)
+    first_name = user.get("first_name", "Web User") if user else "Web User"
+    username = user.get("username", "") if user else ""
+    username_str = f" (@{username})" if username else ""
+    
+    admin_msg = (
+        f"📥 **New Deposit Request (via WebApp)!**\n\n"
+        f"User: {first_name}{username_str}\n"
+        f"User ID: `{user_id}`\n"
+        f"Amount: **Rs {amount}**\n"
+        f"Txn ID: `{upi_txn_id}`"
+    )
+    
+    from bot.keyboards import get_admin_action_keyboard
+    import asyncio
+    async def send_admin_msg():
+        try:
+            await bot_client.send_message(
+                Config.ADMIN_ID,
+                admin_msg,
+                reply_markup=get_admin_action_keyboard(str(tx_id), "deposit")
+            )
+        except Exception as e:
+            print(f"Failed to notify admin: {e}")
+            
+    asyncio.run_coroutine_threadsafe(send_admin_msg(), bot_client.loop)
+    
+    async def send_user_msg():
+        try:
+            await bot_client.send_message(
+                user_id,
+                f"✅ **Deposit Submitted via WebApp!**\n\n"
+                f"Deposit of **Rs {amount}** with Txn ID `{upi_txn_id}` is pending admin verification.\n"
+                f"You will receive a notification as soon as it is approved."
+            )
+        except Exception as e:
+            print(f"Failed to notify user: {e}")
+            
+    asyncio.run_coroutine_threadsafe(send_user_msg(), bot_client.loop)
+    
+    return {"status": "success", "message": "Deposit request submitted successfully!"}
+
+@socketio.on("submit_redeem_from_webapp")
+def handle_submit_redeem_from_webapp(data):
+    user_id = int(data["userId"])
+    amount = int(data["amount"])
+    upi_or_mobile = data["upiOrMobile"].strip()
+    
+    if not upi_or_mobile:
+        return {"status": "error", "message": "UPI ID or Mobile Number is required."}
+        
+    from database import get_user, update_balance, transactions_col
+    user = get_user(user_id)
+    if not user or user.get("balance", 0.0) < amount:
+        return {"status": "error", "message": f"Insufficient balance. Available balance is Rs {user.get('balance', 0.0):.2f}"}
+        
+    success, new_bal = update_balance(user_id, -amount, "redeem", {"upi_or_mobile": upi_or_mobile})
+    if not success:
+        return {"status": "error", "message": "Failed to process transaction. Insufficient balance."}
+        
+    tx = transactions_col.find_one(
+        {"user_id": user_id, "status": "pending", "type": "redeem"},
+        sort=[("created_at", -1)]
+    )
+    tx_id = tx["_id"] if tx else "unknown"
+    
+    # Notify Admin
+    first_name = user.get("first_name", "Web User")
+    username = user.get("username", "")
+    username_str = f" (@{username})" if username else ""
+    
+    admin_msg = (
+        f"📤 **New Withdrawal Request (via WebApp)!**\n\n"
+        f"User: {first_name}{username_str}\n"
+        f"User ID: `{user_id}`\n"
+        f"Redeem Pack: **Rs {amount}**\n"
+        f"Withdrawal Destination: `{upi_or_mobile}`"
+    )
+    
+    from bot.keyboards import get_admin_action_keyboard
+    import asyncio
+    async def send_admin_msg():
+        try:
+            await bot_client.send_message(
+                Config.ADMIN_ID,
+                admin_msg,
+                reply_markup=get_admin_action_keyboard(str(tx_id), "redeem")
+            )
+        except Exception as e:
+            print(f"Failed to notify admin: {e}")
+            
+    asyncio.run_coroutine_threadsafe(send_admin_msg(), bot_client.loop)
+    
+    async def send_user_msg():
+        try:
+            await bot_client.send_message(
+                user_id,
+                f"✅ **Withdrawal Request Registered via WebApp!**\n\n"
+                f"Request to redeem **Rs {amount}** to `{upi_or_mobile}` is pending admin transfer.\n"
+                f"Once processed, you will get a notification."
+            )
+        except Exception as e:
+            print(f"Failed to notify user: {e}")
+            
+    asyncio.run_coroutine_threadsafe(send_user_msg(), bot_client.loop)
+    
+    return {"status": "success", "message": "Withdrawal request submitted successfully!"}
+
+@socketio.on("play_with_bot_free")
+def handle_play_with_bot_free(data):
+    user_id = int(data["userId"])
+    username = data["username"]
+    
+    if user_id in matchmaker.user_to_match:
+        existing_match_id = matchmaker.user_to_match[user_id]
+        match = matchmaker.get_match(existing_match_id)
+        if match and match.status != "completed":
+            join_room(existing_match_id)
+            emit("match_update", match.to_dict())
+            return
+            
+    match = HandCricketMatch(
+        player_a_id=user_id,
+        player_a_name=username,
+        player_b_id="bot",
+        player_b_name="Smart Bot",
+        match_type="free"
+    )
+    match.status = "toss"
+    match.toss_selector = user_id
+    match.toss_choice_pending = True
+    
+    matchmaker.active_matches[match.match_id] = match
+    matchmaker.user_to_match[user_id] = match.match_id
+    
+    join_room(match.match_id)
+    emit("match_found", match.to_dict())
+    start_ball_timer(match.match_id, match.current_inning, match.current_ball)
+
+@socketio.on("join_challenge_by_code")
+def handle_join_challenge_by_code(data):
+    user_id = int(data["userId"])
+    username = data["username"]
+    code = data["code"].strip()
+    
+    match, err = matchmaker.join_challenge_by_code(code, user_id, username)
+    if err:
+        return {"status": "error", "message": err}
+        
+    join_room(match.match_id)
+    socketio.emit("match_update", match.to_dict(), to=match.match_id)
+    start_ball_timer(match.match_id, match.current_inning, match.current_ball)
+    
+    # Notify host in bot chat
+    import asyncio
+    async def send_host_msg():
+        try:
+            host_id = match.player_a["user_id"]
+            await bot_client.send_message(
+                host_id,
+                f"🤝 {username} joined your challenge via code! The match is starting."
+            )
+        except Exception:
+            pass
+    asyncio.run_coroutine_threadsafe(send_host_msg(), bot_client.loop)
+    
+    return {"status": "success", "match": match.to_dict()}
 
 # --- REMATCH MECHANISM ---
 @socketio.on("request_rematch")
