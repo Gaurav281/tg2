@@ -271,8 +271,8 @@ def handle_connect():
                     
                     # Notify room about rejoin
                     emit("player_rejoined", {"userId": uid}, to=match_id)
-                    # Resend latest match status
-                    emit("match_update", match.to_dict(), to=request.sid)
+                    # Resend latest match status to the entire room to sync online state
+                    socketio.emit("match_update", match.to_dict(), to=match_id)
         except ValueError:
             pass
 
@@ -538,9 +538,9 @@ def process_match_payout(match):
 # --- TIMEOUT BALL TIMERS (6 SECONDS FOR CHOICE) ---
 
 def start_ball_timer(match_id, inning, ball_num):
-    """Initialize a 10-second timer for player choices plus 2s delay and grace."""
+    """Initialize a 10-second timer for player choices plus 3s delay and grace."""
     cancel_ball_timer(match_id)
-    t = threading.Timer(12.5, run_ball_timeout, args=[match_id, inning, ball_num])
+    t = threading.Timer(13.5, run_ball_timeout, args=[match_id, inning, ball_num])
     ball_timers[match_id] = t
     t.start()
 
@@ -680,6 +680,9 @@ def handle_request_rematch(data):
         matchmaker.active_matches[new_match.match_id] = new_match
         matchmaker.user_to_match[user_id] = new_match.match_id
         
+        # Join user to new room
+        socketio.server.enter_room(request.sid, new_match.match_id)
+        
         emit("rematch_started", new_match.to_dict(), to=request.sid)
         start_ball_timer(new_match.match_id, new_match.current_inning, new_match.current_ball)
         return
@@ -712,6 +715,12 @@ def handle_request_rematch(data):
         matchmaker.user_to_match[host_id] = new_match.match_id
         matchmaker.user_to_match[guest_id] = new_match.match_id
         
+        # Join both players to the new room
+        for u_id in [host_id, guest_id]:
+            sid = connected_users.get(u_id)
+            if sid:
+                socketio.server.enter_room(sid, new_match.match_id)
+                
         socketio.emit("rematch_started", new_match.to_dict(), to=match_id)
         start_ball_timer(new_match.match_id, new_match.current_inning, new_match.current_ball)
     else:

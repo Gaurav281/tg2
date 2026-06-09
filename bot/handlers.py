@@ -138,6 +138,14 @@ async def start_handler(client: Client, message: Message):
                 if err:
                     await clean_send(client, user_id, f"❌ Challenge Error: {err}")
                 else:
+                    # Notify Socket.IO room and start timer
+                    try:
+                        from app import socketio, start_ball_timer
+                        socketio.emit("match_update", match.to_dict(), to=match.match_id)
+                        start_ball_timer(match.match_id, match.current_inning, match.current_ball)
+                    except Exception as e:
+                        print(f"Error starting challenge via socket: {e}")
+                        
                     # Notify host
                     try:
                         host_id = match.player_a["user_id"]
