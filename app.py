@@ -143,6 +143,18 @@ def get_user_api(user_id):
         "completed_at": {"$gte": start_of_today}
     })
         
+    from database import transactions_col
+    pending_deposits = transactions_col.count_documents({
+        "user_id": int(user_id),
+        "type": "deposit",
+        "status": "pending"
+    })
+    pending_redeems = transactions_col.count_documents({
+        "user_id": int(user_id),
+        "type": "redeem",
+        "status": "pending"
+    })
+        
     return jsonify({
         "user": {
             "user_id": user.get("_id"),
@@ -155,7 +167,9 @@ def get_user_api(user_id):
             "referral_claimed": user.get("referral_claimed", []),
             "daily_missions": user.get("daily_missions", {}),
             "is_banned": user.get("is_banned", False),
-            "tasks_completed_today": completed_today
+            "tasks_completed_today": completed_today,
+            "pending_deposits": pending_deposits,
+            "pending_redeems": pending_redeems
         },
         "active_users": active_count
     }), 200
@@ -168,6 +182,54 @@ def get_leaderboard_api(user_id):
     return jsonify({
         "leaderboard": leaderboard,
         "user_rank": user_rank
+    }), 200
+
+@app.route("/api/task/<user_id>", methods=["GET", "POST"])
+def manage_task_api(user_id):
+    user_id = int(user_id)
+    from tasks.shortener import create_or_get_task, tasks_col, IST
+    from datetime import datetime
+    
+    if request.method == "POST":
+        task, status = create_or_get_task(user_id)
+        if not task:
+            if status == "limit_reached":
+                return jsonify({"error": "Daily limit reached. 4 tasks will be available tomorrow."}), 400
+            return jsonify({"error": "Failed to create task."}), 500
+        return jsonify({
+            "success": True, 
+            "task": {
+                "id": task["_id"],
+                "shortened_url": task["shortened_url"],
+                "status": task["status"]
+            }
+        }), 200
+        
+    # GET: check if there is an active ongoing task
+    now = datetime.now(IST)
+    start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    completed_today = tasks_col.count_documents({
+        "user_id": user_id,
+        "status": "completed",
+        "completed_at": {"$gte": start_of_today}
+    })
+    
+    ongoing_task = tasks_col.find_one({
+        "user_id": user_id,
+        "status": "ongoing"
+    })
+    
+    task_data = None
+    if ongoing_task:
+        task_data = {
+            "id": ongoing_task["_id"],
+            "shortened_url": ongoing_task["shortened_url"],
+            "status": ongoing_task["status"]
+        }
+        
+    return jsonify({
+        "completed_today": completed_today,
+        "active_task": task_data
     }), 200
 
 @app.route("/api/history/<user_id>", methods=["GET"])

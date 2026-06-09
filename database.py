@@ -61,8 +61,7 @@ def create_user(user_id, username, first_name, referred_by=None):
             "max_score": 0,
             "claimed": {
                 "matches_3": False,
-                "add_balance": False,
-                "score_30": False
+                "add_balance": False
             }
         },
         "is_banned": False,
@@ -183,8 +182,9 @@ def approve_deposit(tx_id):
         }
     )
     
-    # Track mission progress: update balance added
-    update_daily_mission_progress(user_id, balance_added=amount)
+    # Track mission progress: update balance added if Rs 10 or more
+    if amount >= 10:
+        update_daily_mission_progress(user_id, balance_added=amount)
     
     return True, {"user_id": user_id, "amount": final_amount}
 
@@ -382,8 +382,7 @@ def update_daily_mission_progress(user_id, matches_played=0, balance_added=0.0, 
             "max_score": 0,
             "claimed": {
                 "matches_3": False,
-                "add_balance": False,
-                "score_30": False
+                "add_balance": False
             }
         }
         
@@ -415,8 +414,7 @@ def claim_daily_mission(user_id, mission_key):
     # Rewards mapping
     rewards = {
         "matches_3": 0.20,
-        "add_balance": 0.30,
-        "score_30": 0.50
+        "add_balance": 0.30
     }
     reward_amt = rewards.get(mission_key, 0.0)
     
@@ -424,9 +422,7 @@ def claim_daily_mission(user_id, mission_key):
     eligible = False
     if mission_key == "matches_3" and dm["matches_played"] >= 3:
         eligible = True
-    elif mission_key == "add_balance" and dm["balance_added"] > 0:
-        eligible = True
-    elif mission_key == "score_30" and dm["max_score"] >= 30:
+    elif mission_key == "add_balance" and dm["balance_added"] >= 10:
         eligible = True
         
     if not eligible:

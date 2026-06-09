@@ -111,12 +111,15 @@ async def start_handler(client: Client, message: Message):
     # Handle invite parameter
     referred_by = None
     challenge_match_id = None
+    verify_task_id = None
     if message.command and len(message.command) > 1:
         param = message.command[1]
         if param.startswith("invite_"):
             referred_by = param.split("_")[1]
         elif param.startswith("challenge_"):
             challenge_match_id = param.split("_")[1]
+        elif param.startswith("verify_"):
+            verify_task_id = param.split("_")[1]
             
     # Create or fetch user
     if not user:
@@ -124,6 +127,27 @@ async def start_handler(client: Client, message: Message):
         is_new = True
     else:
         is_new = False
+
+    # Handle task verification parameter
+    if verify_task_id:
+        from tasks.shortener import verify_and_reward_task
+        success, msg = verify_and_reward_task(verify_task_id)
+        if success:
+            await clean_send(
+                client, 
+                user_id, 
+                f"✅ **Task Verified Successfully!**\n\n"
+                f"Reward of **Rs 0.50** has been credited to your wallet.", 
+                reply_markup=get_start_keyboard(user_id, user_id == Config.ADMIN_ID)
+            )
+        else:
+            await clean_send(
+                client, 
+                user_id, 
+                f"❌ **Verification Failed:**\n{msg}", 
+                reply_markup=get_start_keyboard(user_id, user_id == Config.ADMIN_ID)
+            )
+        return
         
     # If starting via a challenge match link
     if challenge_match_id:
@@ -457,7 +481,8 @@ async def btn_challenge_callback(client: Client, query: CallbackQuery):
     text = (
         f"⚔️ **Challenge Friend**\n\n"
         f"You can challenge your friends to a Hand Cricket match!\n\n"
-        f"Share the challenge link below with your friend. When they open it, they will join your match directly:\n\n"
+        f"Share the challenge code or link below with your friend. When they join, the match will start instantly:\n\n"
+        f"🔑 **Challenge Code:** `{match.challenge_code}`\n"
         f"🔗 **Challenge Link:**\n`{challenge_link}`\n\n"
         f"⌛ *Waiting for friend to join...*"
     )

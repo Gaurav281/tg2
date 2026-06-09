@@ -53,8 +53,8 @@ def create_or_get_task(user_id):
     # First 2 links: arolinks
     # Next 2 links: vplink
     task_id = str(uuid.uuid4())
-    backend_url = get_backend_url()
-    destination_url = f"{backend_url}/verify-task/{task_id}"
+    bot_uname = get_bot_username()
+    destination_url = f"https://t.me/{bot_uname}?start=verify_{task_id}"
     encoded_url = urllib.parse.quote(destination_url)
     
     shortened_url = None
