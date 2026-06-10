@@ -160,10 +160,6 @@ class HandCricketMatch:
             
         player["current_choice"] = choice
         
-        # If playing against bot, bot makes its choice immediately
-        if self.player_b["user_id"] == "bot" and self.player_b["current_choice"] is None:
-            self.player_b["current_choice"] = self.get_smart_bot_choice()
-            
         # Check if both choices are now ready
         if self.player_a["current_choice"] is not None and self.player_b["current_choice"] is not None:
             self.process_ball()
@@ -228,7 +224,7 @@ class HandCricketMatch:
 
     def handle_ball_timeout(self, timed_out_user_id):
         """
-        Processes a ball when a 6s timer expires.
+        Processes a ball when a timer expires.
         If user_id is passed, it means that player timed out.
         If both players timed out, we pass None.
         """
@@ -238,6 +234,12 @@ class HandCricketMatch:
         p_a = self.player_a
         p_b = self.player_b
         
+        # Resolve bot choices first if they are None (so bot never times out)
+        if p_a["user_id"] == "bot" and p_a["current_choice"] is None:
+            p_a["current_choice"] = self.get_smart_bot_choice()
+        if p_b["user_id"] == "bot" and p_b["current_choice"] is None:
+            p_b["current_choice"] = self.get_smart_bot_choice()
+            
         # Resolve choices
         if p_a["current_choice"] is None:
             p_a["current_choice"] = -1  # indicates timeout

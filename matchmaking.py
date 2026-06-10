@@ -202,5 +202,28 @@ class Matchmaker:
                 # Do not delete match object completely, as we might need it for statistics or Socket references temporarily
                 # But we mark it finished
 
+    def get_paid_playing_count(self):
+        with self.lock:
+            # count players in paid matchmaking queue
+            queue_count = len(self.queue)
+            # count players in active, non-completed paid matches
+            active_count = 0
+            for m in self.active_matches.values():
+                if m.type == "paid" and m.status not in ["completed", "cancelled"]:
+                    if m.player_a["user_id"] != "bot":
+                        active_count += 1
+                    if m.player_b["user_id"] != "bot":
+                        active_count += 1
+            total = queue_count + active_count
+            if total < 2:
+                # generate a baseline active players count like 2, 4, 6, 8
+                import random
+                # stable based on time minutes
+                minute_seed = int(time.time() / 60)
+                random.seed(minute_seed)
+                total = random.choice([2, 4, 6, 8])
+                random.seed()
+            return total
+
 # Global Matchmaker Instance
 matchmaker = Matchmaker()

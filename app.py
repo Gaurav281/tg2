@@ -154,6 +154,15 @@ def get_user_api(user_id):
         "type": "redeem",
         "status": "pending"
     })
+    
+    from matchmaking import matchmaker
+    paid_playing = matchmaker.get_paid_playing_count()
+    match_id = matchmaker.user_to_match.get(int(user_id))
+    active_match = None
+    if match_id:
+        m = matchmaker.get_match(match_id)
+        if m and m.status not in ["completed", "cancelled"]:
+            active_match = m.to_dict()
         
     return jsonify({
         "user": {
@@ -171,7 +180,9 @@ def get_user_api(user_id):
             "pending_deposits": pending_deposits,
             "pending_redeems": pending_redeems
         },
-        "active_users": active_count
+        "active_users": active_count,
+        "paid_playing": paid_playing,
+        "active_match": active_match
     }), 200
 
 @app.route("/api/leaderboard/<user_id>", methods=["GET"])
@@ -355,26 +366,26 @@ def handle_disconnect():
         # Remove from matchmaking queue
         matchmaker.remove_from_queue(uid)
         
-        # If user was in an active match, start 10s forfeit timer
+        # If user was in an active match, start 20s forfeit timer
         match_id = matchmaker.user_to_match.get(uid)
         if match_id:
             match = matchmaker.get_match(match_id)
             if match and match.status not in ["completed", "cancelled"] and match.type != "free":
-                # Free match doesn't strictly need 10s forfeit if they don't care, but paid matches do
                 player = match.get_player(uid)
                 if player:
                     player["is_offline"] = True
                 
-                # Notify opponent
-                emit("player_offline", {"userId": uid, "countdown": 10}, to=match_id)
+                # Notify opponent and room about the offline state
+                socketio.emit("match_update", match.to_dict(), to=match_id)
+                emit("player_offline", {"userId": uid, "countdown": 20}, to=match_id)
                 
                 # Start timer
-                t = threading.Timer(10.0, run_forfeit_timeout, args=[match_id, uid])
+                t = threading.Timer(20.0, run_forfeit_timeout, args=[match_id, uid])
                 offline_timers[uid] = t
                 t.start()
 
 def run_forfeit_timeout(match_id, user_id):
-    """Triggered after 10s offline. Forfeits match in favor of opponent."""
+    """Triggered after 20s offline. Forfeits match in favor of opponent."""
     match = matchmaker.get_match(match_id)
     if match and match.status not in ["completed", "cancelled"]:
         match.handle_player_forfeit(user_id)
@@ -599,7 +610,9 @@ def process_match_payout(match):
             score_b=match.player_b["score"]
         )
 
-# --- TIMEOUT BALL TIMERS (6 SECONDS FOR CHOICE) ---
+# --- TIMEOUT BALL TIMERS (10 SECONDS FOR CHOICE) ---
+
+bot_choice_timers = {}
 
 def start_ball_timer(match_id, inning, ball_num):
     """Initialize a 10-second timer for player choices plus 3s delay and grace."""
@@ -607,11 +620,51 @@ def start_ball_timer(match_id, inning, ball_num):
     t = threading.Timer(13.5, run_ball_timeout, args=[match_id, inning, ball_num])
     ball_timers[match_id] = t
     t.start()
+    
+    # Delayed bot choices
+    match = matchmaker.get_match(match_id)
+    if match and (match.player_a["user_id"] == "bot" or match.player_b["user_id"] == "bot"):
+        if match.status in ["batting_1", "batting_2"]:
+            bt = threading.Timer(5.0, run_bot_choice, args=[match_id, inning, ball_num])
+            bot_choice_timers[match_id] = bt
+            bt.start()
 
 def cancel_ball_timer(match_id):
     t = ball_timers.pop(match_id, None)
     if t:
         t.cancel()
+    bt = bot_choice_timers.pop(match_id, None)
+    if bt:
+        bt.cancel()
+
+def run_bot_choice(match_id, inning, ball_num):
+    match = matchmaker.get_match(match_id)
+    if not match or match.status not in ["batting_1", "batting_2"] or match.winner_id:
+        return
+    if match.current_inning != inning or match.current_ball != ball_num:
+        return
+        
+    bot_player = match.player_b if match.player_b["user_id"] == "bot" else match.player_a
+    if bot_player["current_choice"] is None:
+        bot_player["current_choice"] = match.get_smart_bot_choice()
+        
+        # Check if human player has already chosen
+        human_player = match.player_a if match.player_b["user_id"] == "bot" else match.player_b
+        if human_player["current_choice"] is not None:
+            # Both choices are ready, process ball
+            cancel_ball_timer(match_id)
+            match.process_ball()
+            socketio.emit("match_update", match.to_dict(), to=match_id)
+            
+            if match.status == "completed":
+                process_match_payout(match)
+                socketio.emit("match_update", match.to_dict(), to=match_id)
+                matchmaker.clean_completed_match(match_id)
+            else:
+                start_ball_timer(match_id, match.current_inning, match.current_ball)
+        else:
+            # Emit update to show bot choice selected (Opp Choice: Selected)
+            socketio.emit("match_update", match.to_dict(), to=match_id)
 
 # Dynamic bindings to resolve circular imports
 matchmaker.socketio = socketio
