@@ -23,6 +23,7 @@ transactions_col = db["transactions"]
 matches_col = db["matches"]
 tasks_col = db["tasks"]
 task_stats_col = db["task_stats"]
+feedbacks_col = db["feedbacks"]
 
 def get_user(user_id):
     """Retrieve user details by Telegram user_id."""
@@ -633,3 +634,14 @@ def get_pending_deposits():
 
 def get_pending_redeems():
     return list(transactions_col.find({"type": "redeem", "status": "pending"}).sort("created_at", -1))
+
+def save_feedback(user_id, selected_games, other_game, likes_game):
+    """Saves user feedback to the feedbacks collection."""
+    feedback_doc = {
+        "user_id": int(user_id),
+        "selected_games": selected_games,
+        "other_game": other_game,
+        "likes_game": likes_game,
+        "created_at": datetime.now(timezone.utc)
+    }
+    return feedbacks_col.insert_one(feedback_doc).inserted_id

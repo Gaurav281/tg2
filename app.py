@@ -18,7 +18,8 @@ from config import Config
 from database import (
     get_user, create_user, update_balance, get_transaction_history,
     get_match_history, get_leaderboard, get_user_rank, claim_daily_streak,
-    claim_daily_mission, claim_referral_reward, save_match_result, tasks_col
+    claim_daily_mission, claim_referral_reward, save_match_result, tasks_col,
+    save_feedback
 )
 from matchmaking import matchmaker
 from game import HandCricketMatch
@@ -313,6 +314,23 @@ def claim_referral_api(user_id):
         return jsonify({"success": True, "reward": res}), 200
     else:
         return jsonify({"success": False, "error": res}), 400
+
+@app.route("/api/feedback/<user_id>", methods=["POST"])
+def submit_feedback_api(user_id):
+    user_id = int(user_id)
+    user = get_user(user_id)
+    if not user:
+        return jsonify({"success": False, "message": "User not found"}), 404
+
+    data = request.json or {}
+    selected_games = data.get("selected_games", [])
+    other_game = data.get("other_game", "")
+    likes_game = data.get("likes_game", "")
+
+    # Save to database
+    save_feedback(user_id, selected_games, other_game, likes_game)
+
+    return jsonify({"success": True, "message": "Feedback submitted successfully"})
 
 
 # --- SOCKET.IO EVENT HANDLERS ---
