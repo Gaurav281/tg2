@@ -504,6 +504,19 @@ def handle_cancel_challenge_match(data):
         socketio.emit("match_update", match.to_dict(), to=match_id)
         matchmaker.clean_completed_match(match_id)
 
+@socketio.on("forfeit_match")
+def handle_forfeit_match(data):
+    match_id = data["matchId"]
+    user_id = int(data["userId"])
+    
+    match = matchmaker.get_match(match_id)
+    if match and match.status not in ["completed", "cancelled"]:
+        cancel_ball_timer(match_id)
+        match.handle_player_forfeit(user_id)
+        process_match_payout(match)
+        socketio.emit("match_update", match.to_dict(), to=match_id)
+        matchmaker.clean_completed_match(match_id)
+
 @socketio.on("choose_toss_side")
 def handle_choose_toss_side(data):
     match_id = data["matchId"]
