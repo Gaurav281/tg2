@@ -408,12 +408,12 @@ def handle_join_matchmaking(data):
         emit("matchmaking_error", {"message": "User is banned or not registered."})
         return
         
-    if user.get("balance", 0.0) < 1.0:
-        emit("matchmaking_error", {"message": "Insufficient balance! Paid match requires Rs 1.00."})
+    if user.get("balance", 0.0) < 5.0:
+        emit("matchmaking_error", {"message": "Insufficient balance! Paid match requires Rs 5.00."})
         return
         
-    # Deduct match fee (Rs 1.00) atomically
-    success, new_bal = update_balance(user_id, -1.0, "match_fee", {"status": "matchmaking"})
+    # Deduct match fee (Rs 5.00) atomically
+    success, new_bal = update_balance(user_id, -5.0, "match_fee", {"status": "matchmaking"})
     if not success:
         emit("matchmaking_error", {"message": "Failed to lock match fee."})
         return
@@ -423,7 +423,7 @@ def handle_join_matchmaking(data):
     
     if res["status"] == "already_in_match":
         # Refund fee
-        update_balance(user_id, 1.0, "match_refund", {"reason": "Already in match"})
+        update_balance(user_id, 5.0, "match_refund", {"reason": "Already in match"})
         emit("match_update", matchmaker.get_match(res["match_id"]).to_dict())
         return
         
@@ -473,7 +473,7 @@ def handle_cancel_matchmaking(data):
     # Remove from queue
     matchmaker.remove_from_queue(user_id)
     # Refund match fee
-    update_balance(user_id, 1.0, "match_refund", {"reason": "Cancelled by user"})
+    update_balance(user_id, 5.0, "match_refund", {"reason": "Cancelled by user"})
     emit("matchmaking_cancelled")
 
 @socketio.on("join_challenge")
@@ -591,15 +591,15 @@ def process_match_payout(match):
     if match.type == "paid":
         winner_id = match.winner_id
         
-        # Winner Payout (Rs 1.80)
+        # Winner Payout (Rs 8.50)
         if winner_id not in ["draw", "bot"]:
-            update_balance(winner_id, 1.80, "match_win", {"match_id": match.match_id})
+            update_balance(winner_id, 8.50, "match_win", {"match_id": match.match_id})
         elif winner_id == "draw":
-            # Refund both players Rs 1.00
+            # Refund both players Rs 5.00
             if match.player_a["user_id"] != "bot":
-                update_balance(match.player_a["user_id"], 1.00, "match_refund", {"match_id": match.match_id, "reason": "Match Draw"})
+                update_balance(match.player_a["user_id"], 5.00, "match_refund", {"match_id": match.match_id, "reason": "Match Draw"})
             if match.player_b["user_id"] != "bot":
-                update_balance(match.player_b["user_id"], 1.00, "match_refund", {"match_id": match.match_id, "reason": "Match Draw"})
+                update_balance(match.player_b["user_id"], 5.00, "match_refund", {"match_id": match.match_id, "reason": "Match Draw"})
                 
         # Save results in Database
         save_match_result(
@@ -988,10 +988,10 @@ def handle_request_rematch(data):
         # Create a new match fee deduction if it is paid
         if match.type == "paid":
             user = get_user(user_id)
-            if not user or user["balance"] < 1.0:
+            if not user or user["balance"] < 5.0:
                 emit("matchmaking_error", {"message": "Insufficient balance for rematch!"})
                 return
-            update_balance(user_id, -1.0, "match_fee", {"details": "Rematch fee"})
+            update_balance(user_id, -5.0, "match_fee", {"details": "Rematch fee"})
             
         new_match = HandCricketMatch(
             player_a_id=user_id,
@@ -1020,12 +1020,12 @@ def handle_request_rematch(data):
         if match.type == "paid":
             for u_id in [host_id, guest_id]:
                 user = get_user(u_id)
-                if not user or user["balance"] < 1.0:
+                if not user or user["balance"] < 5.0:
                     # Cancel rematch
                     socketio.emit("rematch_failed", {"message": "One of the players has insufficient balance."}, to=match_id)
                     return
-            update_balance(host_id, -1.0, "match_fee", {"details": "Rematch fee"})
-            update_balance(guest_id, -1.0, "match_fee", {"details": "Rematch fee"})
+            update_balance(host_id, -5.0, "match_fee", {"details": "Rematch fee"})
+            update_balance(guest_id, -5.0, "match_fee", {"details": "Rematch fee"})
 
         new_match = HandCricketMatch(
             player_a_id=guest_id,  # Swap roles

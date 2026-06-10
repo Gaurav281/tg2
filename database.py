@@ -548,13 +548,13 @@ def get_finance_stats():
     total_redeems = abs(redeems[0]["total"]) if redeems else 0.0
     
     # 3. Total Match Fees (Paid) and Match Wins
-    # Platform earns on paid match fees: 1.0 fee. Winner gets 1.8.
-    # Total match fees collected = count of matches * 2
-    # Total match wins distributed = count of matches * 1.8 (if won by user)
+    # Platform earns on paid match fees: 5.0 fee. Winner gets 8.5.
+    # Total match fees collected = count of matches * 2 (or 1 if against bot)
+    # Total match wins distributed = count of matches * 8.5 (if won by user)
     # If a match is against the bot:
-    #   Fee: 1.0 collected.
-    #   If user wins, user gets 1.8 (loss of 0.8 for platform).
-    #   If bot wins, user gets 0 (profit of 1.0 for platform).
+    #   Fee: 5.0 collected.
+    #   If user wins, user gets 8.5 (loss of 3.5 for platform).
+    #   If bot wins, user gets 0 (profit of 5.0 for platform).
     # Let's count actual match fee / win transactions!
     fee_pipe = [
         {"$match": {"type": "match_fee", "status": "completed"}},

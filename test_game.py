@@ -103,8 +103,13 @@ class TestHandCricketGame(unittest.TestCase):
             
         self.assertEqual(match.status, "batting_1")
         
-        # Play a turn. User plays 5. Bot choice should be auto-generated.
+        # Play a turn. User plays 5.
         success, res = match.make_choice(11111, 5)
+        self.assertTrue(success)
+        
+        # Simulates bot choice selection (which is asynchronously driven by the app server)
+        bot_choice = match.get_smart_bot_choice()
+        success, res = match.make_choice("bot", bot_choice)
         self.assertTrue(success)
         
         # Verify that bot's choice was populated and ball was processed
