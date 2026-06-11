@@ -446,6 +446,22 @@ def claim_daily_streak(user_id):
     if not user:
         return False, "User not found"
         
+    # Check if user has played at least 1 paid match today (IST)
+    start_of_today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_today = start_of_today + timedelta(days=1)
+    
+    played_paid_today = matches_col.find_one({
+        "type": "paid",
+        "created_at": {"$gte": start_of_today, "$lt": end_of_today},
+        "$or": [
+            {"player_a.user_id": user_id},
+            {"player_b.user_id": user_id}
+        ]
+    })
+    
+    if not played_paid_today:
+        return False, "You must play at least 1 paid match today to claim your daily streak reward."
+        
     now = datetime.now(IST)
     last_claim = user.get("last_streak_claim")
     streak = user.get("streak", 0)
