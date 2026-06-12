@@ -172,7 +172,7 @@ def update_balance(user_id, amount, tx_type, details=None):
         # Addition (amount > 0)
         # Check transaction type:
         # If it is a deposit or admin manually adding: added to deposit_balance
-        if tx_type in ["deposit", "admin_add", "match_refund", "car_event_refund", "free_fire_refund"]:
+        if tx_type in ["deposit", "admin_add", "match_refund", "car_event_refund", "free_fire_refund", "car_game_free_win"]:
             new_deposit = round(deposit_bal + amount, 2)
             new_winning = winning_bal
         else:
@@ -489,7 +489,7 @@ def claim_daily_mission(user_id, mission_key):
         
     # Rewards mapping
     rewards = {
-        "matches_3": 0.20,
+        "matches_3": 0.50,
         "add_balance": 0.30
     }
     reward_amt = rewards.get(mission_key, 0.0)
@@ -899,6 +899,11 @@ def submit_car_score(user_id, event_id, score):
     
     # Reload cycle to check if all participants have completed their game
     cyc = car_event_cycles_col.find_one({"_id": cyc["_id"]})
+    
+    # Increment daily mission progress if this is a paid event (entry_fee > 0)
+    if cyc and cyc.get("entry_fee", 0.0) > 0.0:
+        update_daily_mission_progress(user_id, matches_played=1)
+
     completed_participants = [p for p in cyc.get("participants", []) if p["played"]]
     
     if len(completed_participants) >= cyc["max_participants"]:
@@ -929,11 +934,12 @@ def resolve_car_event_cycle(cycle_id):
         print(f"Resolving Event {cyc['event_id']}, Rank {rank}: User {p['user_id']} with score {p['score']} wins Rs {prize}")
         
         if prize > 0:
+            tx_type = "car_game_free_win" if cyc["event_id"] == 1 else "match_win"
             # Credit account
             update_balance(
                 user_id=p["user_id"],
                 amount=prize,
-                tx_type="match_win",
+                tx_type=tx_type,
                 details={
                     "game": "car_game",
                     "event_id": cyc["event_id"],
@@ -1053,6 +1059,10 @@ def join_free_fire_event(user_id, event_id, slot_number):
     if not success:
         return False, "Insufficient balance"
         
+    # Increment daily mission progress if this is a paid tournament
+    if fee > 0.0:
+        update_daily_mission_progress(user_id, matches_played=1)
+        
     # Update slot details
     free_fire_events_col.update_one(
         {"_id": ev_id},
@@ -1143,11 +1153,18 @@ def declare_free_fire_results(event_id, kills_data):
 # --- Seeding Routine ---
 def seed_default_events():
     """Seed initial Car Game active cycles and Free Fire events if database is empty."""
-    # Seed Car Game Event 1 & 2 cycles
+    # Drop and re-seed if we detect old event configuration (e.g. Event 1 entry fee is not 0.0)
+    e1 = car_event_cycles_col.find_one({"event_id": 1, "status": "active"})
+    if e1 and e1.get("entry_fee") != 0.0:
+        print("Old event configuration detected. Re-seeding Car Game cycles...")
+        car_event_cycles_col.delete_many({})
+
+    # Seed Car Game Event 1, 2, 3 cycles
+    # Event 1: Free (Watch 3 Ads), Event 2: Rs 1.00, Event 3: Rs 3.00
     for eid, fee, participants, prizes in [
-        (1, 1.0, 10, {"1": 4.0, "2": 3.0, "3": 1.0}),
-        (2, 3.0, 20, {"1": 12.0, "2": 9.0, "3": 7.0, "4": 6.0, "5": 5.0, "6": 4.0, "7": 3.0, "8": 2.0}),
-        (3, 0.0, 10, {"1": 1.0})
+        (1, 0.0, 10, {"1": 0.5}),
+        (2, 1.0, 10, {"1": 4.0, "2": 3.0, "3": 1.0}),
+        (3, 3.0, 20, {"1": 12.0, "2": 9.0, "3": 7.0, "4": 6.0, "5": 5.0, "6": 4.0, "7": 3.0, "8": 2.0})
     ]:
         active = car_event_cycles_col.find_one({"event_id": eid, "status": "active"})
         if not active:
