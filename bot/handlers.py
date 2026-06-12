@@ -203,14 +203,13 @@ async def start_handler(client: Client, message: Message):
                 return
 
     # Standard /start welcome
-    balance = user.get("balance", 0.5) if user else 0.5
+    balance = user.get("balance", 0.0) if user else 0.0
     is_admin = (user_id == Config.ADMIN_ID)
     
     welcome_text = (
         f"👋 **Welcome to Hand Cricket Game, {first_name}!**\n\n"
         f"Play the classic Hand Cricket game right inside Telegram and earn real money!\n\n"
-        f"💰 **Wallet Balance:** Rs {balance:.2f}\n"
-        f"🔥 **Signup Bonus:** Rs 0.50 credited!\n\n"
+        f"💰 **Wallet Balance:** Rs {balance:.2f}\n\n"
         f"Select an option below to get started:"
     )
     
@@ -556,6 +555,95 @@ async def user_text_handler(client: Client, message: Message):
         elif state["action"] == "wait_unban":
             admin_states.pop(user_id, None)
             await perform_unban(client, user_id, text)
+            return
+
+        # 5. Free Fire Event Create
+        elif state["action"] == "wait_ff_create":
+            admin_states.pop(user_id, None)
+            parts = [p.strip() for p in text.split("|")]
+            if len(parts) != 7:
+                await clean_send(
+                    client,
+                    user_id,
+                    "❌ Invalid format. Please write exactly in the `Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time` format.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_ff_events")]])
+                )
+                return
+            try:
+                mode = parts[0]
+                map_name = parts[1]
+                entry_fee = float(parts[2])
+                prize_per_kill = float(parts[3])
+                max_participants = int(parts[4])
+                start_time = parts[5]
+                end_time = parts[6]
+                
+                from database import free_fire_events_col, IST
+                free_fire_events_col.insert_one({
+                    "mode": mode,
+                    "map": map_name,
+                    "entry_fee": entry_fee,
+                    "prize_per_kill": prize_per_kill,
+                    "max_participants": max_participants,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "slots": {str(i): None for i in range(1, max_participants + 1)},
+                    "created_at": datetime.now(IST)
+                })
+                await clean_send(client, user_id, "✅ Free Fire event created successfully!", reply_markup=get_admin_keyboard())
+            except Exception as e:
+                await clean_send(client, user_id, f"❌ Error saving event: {e}", reply_markup=get_admin_keyboard())
+            return
+
+        # 6. Free Fire Event Edit
+        elif state["action"] == "wait_ff_edit":
+            event_id = state["event_id"]
+            admin_states.pop(user_id, None)
+            parts = [p.strip() for p in text.split("|")]
+            if len(parts) != 7:
+                await clean_send(
+                    client,
+                    user_id,
+                    "❌ Invalid format. Please write exactly in the `Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time` format.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_ff_events")]])
+                )
+                return
+            try:
+                mode = parts[0]
+                map_name = parts[1]
+                entry_fee = float(parts[2])
+                prize_per_kill = float(parts[3])
+                max_participants = int(parts[4])
+                start_time = parts[5]
+                end_time = parts[6]
+                
+                from database import free_fire_events_col
+                from bson.objectid import ObjectId
+                
+                ev = free_fire_events_col.find_one({"_id": ObjectId(event_id)})
+                existing_slots = ev.get("slots", {}) if ev else {}
+                
+                new_slots = {}
+                for i in range(1, max_participants + 1):
+                    slot_key = str(i)
+                    new_slots[slot_key] = existing_slots.get(slot_key, None)
+                    
+                free_fire_events_col.update_one(
+                    {"_id": ObjectId(event_id)},
+                    {"$set": {
+                        "mode": mode,
+                        "map": map_name,
+                        "entry_fee": entry_fee,
+                        "prize_per_kill": prize_per_kill,
+                        "max_participants": max_participants,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "slots": new_slots
+                    }}
+                )
+                await clean_send(client, user_id, "✅ Free Fire event updated successfully!", reply_markup=get_admin_keyboard())
+            except Exception as e:
+                await clean_send(client, user_id, f"❌ Error updating event: {e}", reply_markup=get_admin_keyboard())
             return
             
     # Check user states
@@ -1095,3 +1183,131 @@ async def admin_unban_user_callback(client: Client, query: CallbackQuery):
     admin_states[user_id] = {"action": "wait_unban"}
     text, markup = get_unban_user_prompt()
     await query.edit_message_text(text, reply_markup=markup)
+
+@bot.on_callback_query(filters.regex("admin_ff_events"))
+async def admin_ff_events_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        await query.answer("Access Denied.", show_alert=True)
+        return
+    
+    from database import get_free_fire_events
+    events = get_free_fire_events()
+    
+    text = "🏆 **Free Fire Tournaments**\n\n"
+    if not events:
+        text += "No active tournaments."
+    else:
+        for idx, ev in enumerate(events):
+            text += (
+                f"**{idx+1}. {ev['mode']} - {ev['map']}**\n"
+                f"💰 Entry Fee: Rs {ev['entry_fee']} | Kill Prize: Rs {ev['prize_per_kill']}\n"
+                f"⏰ Time: {ev['start_time']} to {ev['end_time']}\n"
+                f"👥 Slots: {ev['joined_count']}/{ev['max_participants']}\n"
+                f"ID: `{ev['id']}`\n\n"
+            )
+            
+    # Dynamic keyboard
+    keyboard_rows = []
+    for ev in events:
+        keyboard_rows.append([
+            InlineKeyboardButton(f"📝 Edit #{ev['id'][:6]}", callback_data=f"adm_ffedit_{ev['id']}"),
+            InlineKeyboardButton(f"❌ Del #{ev['id'][:6]}", callback_data=f"adm_ffdel_{ev['id']}")
+        ])
+    keyboard_rows.append([InlineKeyboardButton("➕ Create FF Event", callback_data="admin_ff_create")])
+    keyboard_rows.append([InlineKeyboardButton("↩️ Back to Admin Panel", callback_data="admin_panel")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard_rows))
+
+@bot.on_callback_query(filters.regex(r"^adm_ffdel_(.+)"))
+async def admin_ff_delete_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        await query.answer("Access Denied.", show_alert=True)
+        return
+        
+    event_id = query.data.split("_")[2]
+    from database import free_fire_events_col
+    from bson.objectid import ObjectId
+    try:
+        free_fire_events_col.delete_one({"_id": ObjectId(event_id)})
+        await query.answer("Event deleted successfully!", show_alert=True)
+    except Exception as e:
+        await query.answer(f"Error: {e}", show_alert=True)
+        
+    # Refresh events list
+    from database import get_free_fire_events
+    events = get_free_fire_events()
+    text = "🏆 **Free Fire Tournaments**\n\n"
+    if not events:
+        text += "No active tournaments."
+    else:
+        for idx, ev in enumerate(events):
+            text += (
+                f"**{idx+1}. {ev['mode']} - {ev['map']}**\n"
+                f"💰 Entry Fee: Rs {ev['entry_fee']} | Kill Prize: Rs {ev['prize_per_kill']}\n"
+                f"⏰ Time: {ev['start_time']} to {ev['end_time']}\n"
+                f"👥 Slots: {ev['joined_count']}/{ev['max_participants']}\n"
+                f"ID: `{ev['id']}`\n\n"
+            )
+    keyboard_rows = []
+    for ev in events:
+        keyboard_rows.append([
+            InlineKeyboardButton(f"📝 Edit #{ev['id'][:6]}", callback_data=f"adm_ffedit_{ev['id']}"),
+            InlineKeyboardButton(f"❌ Del #{ev['id'][:6]}", callback_data=f"adm_ffdel_{ev['id']}")
+        ])
+    keyboard_rows.append([InlineKeyboardButton("➕ Create FF Event", callback_data="admin_ff_create")])
+    keyboard_rows.append([InlineKeyboardButton("↩️ Back to Admin Panel", callback_data="admin_panel")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard_rows))
+
+@bot.on_callback_query(filters.regex("admin_ff_create"))
+async def admin_ff_create_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        await query.answer("Access Denied.", show_alert=True)
+        return
+        
+    admin_states[user_id] = {"action": "wait_ff_create"}
+    
+    instruction = (
+        "➕ **Create Free Fire Event**\n\n"
+        "Please send the event details in the exact format shown below:\n\n"
+        "`Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time`\n\n"
+        "**Example:**\n"
+        "`BR | Bermuda | 5 | 4 | 50 | 7:00 PM | 8:00 PM`"
+    )
+    await query.edit_message_text(
+        instruction, 
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_ff_events")]])
+    )
+
+@bot.on_callback_query(filters.regex(r"^adm_ffedit_(.+)"))
+async def admin_ff_edit_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        await query.answer("Access Denied.", show_alert=True)
+        return
+        
+    event_id = query.data.split("_")[2]
+    admin_states[user_id] = {"action": "wait_ff_edit", "event_id": event_id}
+    
+    from database import free_fire_events_col
+    from bson.objectid import ObjectId
+    ev = free_fire_events_col.find_one({"_id": ObjectId(event_id)})
+    current_details = ""
+    if ev:
+        current_details = f"Current: `{ev['mode']} | {ev['map']} | {ev['entry_fee']} | {ev['prize_per_kill']} | {ev['max_participants']} | {ev['start_time']} | {ev['end_time']}`\n\n"
+        
+    instruction = (
+        "📝 **Edit Free Fire Event**\n\n"
+        f"{current_details}"
+        "Please send the new event details in the exact format shown below:\n\n"
+        "`Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time`\n\n"
+        "**Example:**\n"
+        "`BR | Bermuda | 5 | 4 | 50 | 7:00 PM | 8:00 PM`"
+    )
+    await query.edit_message_text(
+        instruction, 
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_ff_events")]])
+    )

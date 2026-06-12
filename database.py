@@ -24,6 +24,8 @@ matches_col = db["matches"]
 tasks_col = db["tasks"]
 task_stats_col = db["task_stats"]
 feedbacks_col = db["feedbacks"]
+car_event_cycles_col = db["car_event_cycles"]
+free_fire_events_col = db["free_fire_events"]
 
 def get_user(user_id):
     """Retrieve user details by Telegram user_id."""
@@ -49,7 +51,9 @@ def create_user(user_id, username, first_name, referred_by=None):
         "_id": user_id,
         "username": username or f"User_{user_id}",
         "first_name": first_name or "",
-        "balance": 0.5,  # Signup bonus
+        "balance": 0.0,
+        "free_fire_username": "",
+        "free_fire_uid": "",
         "streak": 0,
         "last_streak_claim": None,
         "referred_by": inviter_id,
@@ -70,15 +74,7 @@ def create_user(user_id, username, first_name, referred_by=None):
     }
     
     users_col.insert_one(user_doc)
-    
-    # Log the signup bonus transaction
-    create_transaction(
-        user_id=user_id,
-        tx_type="signup_bonus",
-        amount=0.5,
-        status="completed",
-        details={"message": "Welcome signup bonus"}
-    )
+
     
     # Update referral count for inviter
     if inviter_id:
@@ -661,3 +657,338 @@ def save_feedback(user_id, selected_games, other_game, likes_game):
         "created_at": datetime.now(timezone.utc)
     }
     return feedbacks_col.insert_one(feedback_doc).inserted_id
+
+# --- Profile Section Helpers ---
+def update_free_fire_profile(user_id, ff_username, ff_uid):
+    """Update user's Free Fire profile details."""
+    users_col.update_one(
+        {"_id": int(user_id)},
+        {"$set": {
+            "free_fire_username": ff_username,
+            "free_fire_uid": ff_uid
+        }}
+    )
+    return True
+
+# --- Car Game Operations ---
+def get_active_car_event_cycles(user_id):
+    """Retrieves current active Car Game event cycles and formats for the user."""
+    cycles = list(car_event_cycles_col.find({"status": "active"}))
+    formatted = []
+    for cyc in cycles:
+        participants = cyc.get("participants", [])
+        # Find user's unplayed or last played participation in this cycle
+        unplayed = [p for p in participants if p["user_id"] == int(user_id) and not p["played"]]
+        played_list = [p for p in participants if p["user_id"] == int(user_id) and p["played"]]
+        
+        user_joined = len(unplayed) > 0
+        user_played = len(unplayed) == 0 and len(played_list) > 0
+        
+        # Calculate scores
+        user_score = 0
+        if unplayed:
+            user_score = unplayed[0].get("score", 0)
+        elif played_list:
+            user_score = max(p.get("score", 0) for p in played_list)
+            
+        formatted.append({
+            "id": str(cyc["_id"]),
+            "event_id": cyc["event_id"],
+            "entry_fee": cyc["entry_fee"],
+            "max_participants": cyc["max_participants"],
+            "prizes": cyc["prizes"],
+            "joined_count": len(participants),
+            "user_joined": user_joined,
+            "user_played": user_played,
+            "user_score": user_score,
+            "status": cyc["status"]
+        })
+    return formatted
+
+def join_car_event(user_id, event_id):
+    """Allows a user to join an active Car Game event cycle by paying the entry fee."""
+    user_id = int(user_id)
+    user = get_user(user_id)
+    if not user:
+        return False, "User not found"
+        
+    cyc = car_event_cycles_col.find_one({"event_id": int(event_id), "status": "active"})
+    if not cyc:
+        return False, "Active event cycle not found"
+        
+    # Check if event is already full
+    if len(cyc.get("participants", [])) >= cyc["max_participants"]:
+        return False, "This event is currently full. Please wait for the next cycle."
+        
+    # Check if user already has an active unplayed participation in this cycle
+    unplayed = [p for p in cyc.get("participants", []) if p["user_id"] == user_id and not p["played"]]
+    if unplayed:
+        return True, {"message": "Already joined, resume play", "cycle_id": str(cyc["_id"])}
+        
+    # Deduct entry fee
+    fee = cyc["entry_fee"]
+    success, new_bal = update_balance(
+        user_id=user_id,
+        amount=-fee,
+        tx_type="car_game_fee",
+        details={"event_id": event_id, "cycle_id": str(cyc["_id"])}
+    )
+    if not success:
+        return False, "Insufficient balance"
+        
+    # Add participant
+    participant = {
+        "user_id": user_id,
+        "username": user.get("first_name") or user.get("username") or f"User {user_id}",
+        "score": 0,
+        "played": False,
+        "joined_at": datetime.now(IST)
+    }
+    
+    car_event_cycles_col.update_one(
+        {"_id": cyc["_id"]},
+        {"$push": {"participants": participant}}
+    )
+    
+    return True, {"message": "Joined successfully", "cycle_id": str(cyc["_id"])}
+
+def submit_car_score(user_id, event_id, score):
+    """Submits a user's score for their unplayed participation in the active Car Game event."""
+    user_id = int(user_id)
+    score = int(score)
+    
+    cyc = car_event_cycles_col.find_one({"event_id": int(event_id), "status": "active"})
+    if not cyc:
+        return False, "Active cycle not found"
+        
+    # Find user's unplayed participation
+    participants = cyc.get("participants", [])
+    unplayed_idx = -1
+    for idx, p in enumerate(participants):
+        if p["user_id"] == user_id and not p["played"]:
+            unplayed_idx = idx
+            break
+            
+    if unplayed_idx == -1:
+        return False, "No active unplayed participation found for this event"
+        
+    # Update score and mark as played
+    car_event_cycles_col.update_one(
+        {"_id": cyc["_id"], f"participants.{unplayed_idx}.user_id": user_id},
+        {
+            "$set": {
+                f"participants.{unplayed_idx}.score": score,
+                f"participants.{unplayed_idx}.played": True
+            }
+        }
+    )
+    
+    # Reload cycle to check if all participants have completed their game
+    cyc = car_event_cycles_col.find_one({"_id": cyc["_id"]})
+    completed_participants = [p for p in cyc.get("participants", []) if p["played"]]
+    
+    if len(completed_participants) >= cyc["max_participants"]:
+        # Resolve the cycle!
+        resolve_car_event_cycle(cyc["_id"])
+        
+    return True, "Score submitted successfully"
+
+def resolve_car_event_cycle(cycle_id):
+    """Evaluates rankings, distributes prize pools, and restarts the event cycle."""
+    cyc = car_event_cycles_col.find_one({"_id": ObjectId(cycle_id), "status": "active"})
+    if not cyc:
+        return
+        
+    participants = [p for p in cyc.get("participants", []) if p["played"]]
+    # Sort by score descending
+    participants.sort(key=lambda x: x["score"], reverse=True)
+    
+    # Prize mappings
+    prizes = cyc["prizes"]
+    
+    # Process rank payouts
+    for rank_idx, p in enumerate(participants):
+        rank = rank_idx + 1
+        prize = float(prizes.get(str(rank), 0.0))
+        
+        # Log rank results
+        print(f"Resolving Event {cyc['event_id']}, Rank {rank}: User {p['user_id']} with score {p['score']} wins Rs {prize}")
+        
+        if prize > 0:
+            # Credit account
+            update_balance(
+                user_id=p["user_id"],
+                amount=prize,
+                tx_type="match_win",
+                details={
+                    "game": "car_game",
+                    "event_id": cyc["event_id"],
+                    "cycle_id": str(cycle_id),
+                    "rank": rank,
+                    "score": p["score"]
+                }
+            )
+            
+        # Send Pyrogram bot notification if client is running
+        from bot.client import bot as bot_client
+        try:
+            notification_text = (
+                f"🏆 **Car Game - Event {cyc['event_id']} Results!**\n\n"
+                f"Congratulations! You ranked **#{rank}** out of {cyc['max_participants']} players with a score of **{p['score']}**.\n"
+                f"💰 **Prize Won:** Rs {prize:.2f}\n\n"
+                f"The event has restarted. Play again to win more!"
+            ) if prize > 0 else (
+                f"🎮 **Car Game - Event {cyc['event_id']} Results!**\n\n"
+                f"You ranked **#{rank}** out of {cyc['max_participants']} players with a score of **{p['score']}**.\n"
+                f"Better luck next time! The event has restarted, join now!"
+            )
+            # Schedule message sending in the bot's event loop
+            import asyncio
+            asyncio.run_coroutine_threadsafe(
+                bot_client.send_message(p["user_id"], notification_text),
+                asyncio.get_event_loop()
+            )
+        except Exception as e:
+            print(f"Failed to send result notification to user {p['user_id']}: {e}")
+            
+    # Mark cycle as completed
+    car_event_cycles_col.update_one(
+        {"_id": ObjectId(cycle_id)},
+        {"$set": {"status": "completed", "resolved_at": datetime.now(IST)}}
+    )
+    
+    # Spawn a new active cycle
+    car_event_cycles_col.insert_one({
+        "event_id": cyc["event_id"],
+        "entry_fee": cyc["entry_fee"],
+        "max_participants": cyc["max_participants"],
+        "prizes": cyc["prizes"],
+        "status": "active",
+        "participants": [],
+        "created_at": datetime.now(IST)
+    })
+
+# --- Free Fire Event Operations ---
+def get_free_fire_events():
+    """Retrieve all available Free Fire events."""
+    events = list(free_fire_events_col.find())
+    formatted = []
+    for ev in events:
+        slots = ev.get("slots", {})
+        joined_count = sum(1 for slot_val in slots.values() if slot_val is not None)
+        formatted.append({
+            "id": str(ev["_id"]),
+            "mode": ev["mode"],
+            "map": ev["map"],
+            "entry_fee": ev["entry_fee"],
+            "prize_per_kill": ev["prize_per_kill"],
+            "max_participants": ev["max_participants"],
+            "start_time": ev["start_time"],
+            "end_time": ev["end_time"],
+            "joined_count": joined_count,
+            "slots": slots
+        })
+    return formatted
+
+def join_free_fire_event(user_id, event_id, slot_number):
+    """Registers a user to a specific slot in a Free Fire event after validating balance."""
+    user_id = int(user_id)
+    slot_key = str(slot_number)
+    
+    user = get_user(user_id)
+    if not user:
+        return False, "User not found"
+        
+    ff_username = user.get("free_fire_username", "").strip()
+    ff_uid = user.get("free_fire_uid", "").strip()
+    if not ff_username or not ff_uid:
+        return False, "profile_incomplete"
+        
+    try:
+        ev_id = ObjectId(event_id)
+    except Exception:
+        return False, "Invalid event ID"
+        
+    ev = free_fire_events_col.find_one({"_id": ev_id})
+    if not ev:
+        return False, "Event not found"
+        
+    slots = ev.get("slots", {})
+    if slot_key not in slots:
+        return False, "Invalid slot number"
+        
+    if slots[slot_key] is not None:
+        return False, "Slot already occupied"
+        
+    # Check if user is already in another slot for this event
+    for s_key, s_val in slots.items():
+        if s_val and s_val.get("user_id") == user_id:
+            return False, "You have already joined this event"
+            
+    # Deduct entry fee
+    fee = ev["entry_fee"]
+    success, new_bal = update_balance(
+        user_id=user_id,
+        amount=-fee,
+        tx_type="free_fire_fee",
+        details={"event_id": event_id, "slot": slot_number}
+    )
+    if not success:
+        return False, "Insufficient balance"
+        
+    # Update slot details
+    free_fire_events_col.update_one(
+        {"_id": ev_id},
+        {"$set": {
+            f"slots.{slot_key}": {
+                "user_id": user_id,
+                "username": user.get("username", ""),
+                "first_name": user.get("first_name", ""),
+                "ff_username": ff_username,
+                "ff_uid": ff_uid
+            }
+        }}
+    )
+    
+    return True, "Successfully joined Free Fire tournament"
+
+# --- Seeding Routine ---
+def seed_default_events():
+    """Seed initial Car Game active cycles and Free Fire events if database is empty."""
+    # Seed Car Game Event 1 & 2 cycles
+    for eid, fee, participants, prizes in [
+        (1, 1.0, 10, {"1": 4.0, "2": 3.0, "3": 1.0}),
+        (2, 3.0, 20, {"1": 12.0, "2": 9.0, "3": 7.0, "4": 6.0, "5": 5.0, "6": 4.0, "7": 3.0, "8": 2.0})
+    ]:
+        active = car_event_cycles_col.find_one({"event_id": eid, "status": "active"})
+        if not active:
+            car_event_cycles_col.insert_one({
+                "event_id": eid,
+                "entry_fee": fee,
+                "max_participants": participants,
+                "prizes": prizes,
+                "status": "active",
+                "participants": [],
+                "created_at": datetime.now(IST)
+            })
+            
+    # Seed Free Fire Event 1
+    ff_exists = free_fire_events_col.find_one()
+    if not ff_exists:
+        free_fire_events_col.insert_one({
+            "mode": "BR",
+            "map": "Bermuda",
+            "entry_fee": 5.0,
+            "prize_per_kill": 4.0,
+            "max_participants": 50,
+            "start_time": "7:00 PM",
+            "end_time": "8:00 PM",
+            "slots": {str(i): None for i in range(1, 51)},
+            "created_at": datetime.now(IST)
+        })
+
+# Auto seed default events
+try:
+    seed_default_events()
+except Exception as e:
+    print(f"Error seeding events: {e}")

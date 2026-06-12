@@ -19,7 +19,8 @@ from database import (
     get_user, create_user, update_balance, get_transaction_history,
     get_match_history, get_leaderboard, get_user_rank, claim_daily_streak,
     claim_daily_mission, claim_referral_reward, save_match_result, tasks_col,
-    save_feedback
+    save_feedback, update_free_fire_profile, get_active_car_event_cycles,
+    join_car_event, submit_car_score, get_free_fire_events, join_free_fire_event
 )
 from matchmaking import matchmaker
 from game import HandCricketMatch
@@ -179,7 +180,9 @@ def get_user_api(user_id):
             "is_banned": user.get("is_banned", False),
             "tasks_completed_today": completed_today,
             "pending_deposits": pending_deposits,
-            "pending_redeems": pending_redeems
+            "pending_redeems": pending_redeems,
+            "free_fire_username": user.get("free_fire_username", ""),
+            "free_fire_uid": user.get("free_fire_uid", "")
         },
         "active_users": active_count,
         "paid_playing": paid_playing,
@@ -331,6 +334,83 @@ def submit_feedback_api(user_id):
     save_feedback(user_id, selected_games, other_game, likes_game)
 
     return jsonify({"success": True, "message": "Feedback submitted successfully"})
+
+@app.route("/api/user/profile/<user_id>", methods=["POST"])
+def update_profile_route(user_id):
+    data = request.json or {}
+    ff_username = data.get("free_fire_username", "").strip()
+    ff_uid = data.get("free_fire_uid", "").strip()
+    
+    if not ff_username or not ff_uid:
+        return jsonify({"success": False, "error": "Both Free Fire Username and UID are required."}), 400
+        
+    update_free_fire_profile(user_id, ff_username, ff_uid)
+    return jsonify({"success": True, "message": "Profile updated successfully"}), 200
+
+@app.route("/api/car-game/events", methods=["GET"])
+def get_car_events_route():
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
+    try:
+        events = get_active_car_event_cycles(user_id)
+        return jsonify({"success": True, "events": events}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/car-game/join", methods=["POST"])
+def join_car_event_route():
+    data = request.json or {}
+    user_id = data.get("user_id")
+    event_id = data.get("event_id")
+    if not user_id or not event_id:
+        return jsonify({"success": False, "error": "Missing user_id or event_id"}), 400
+    
+    success, res = join_car_event(user_id, event_id)
+    if success:
+        return jsonify({"success": True, "data": res}), 200
+    else:
+        return jsonify({"success": False, "error": res}), 400
+
+@app.route("/api/car-game/submit-score", methods=["POST"])
+def submit_car_score_route():
+    data = request.json or {}
+    user_id = data.get("user_id")
+    event_id = data.get("event_id")
+    score = data.get("score")
+    if user_id is None or event_id is None or score is None:
+        return jsonify({"success": False, "error": "Missing user_id, event_id, or score"}), 400
+        
+    success, msg = submit_car_score(user_id, event_id, score)
+    if success:
+        return jsonify({"success": True, "message": msg}), 200
+    else:
+        return jsonify({"success": False, "error": msg}), 400
+
+@app.route("/api/free-fire/events", methods=["GET"])
+def get_free_fire_events_route():
+    try:
+        events = get_free_fire_events()
+        return jsonify({"success": True, "events": events}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/free-fire/join", methods=["POST"])
+def join_free_fire_event_route():
+    data = request.json or {}
+    user_id = data.get("user_id")
+    event_id = data.get("event_id")
+    slot_number = data.get("slot_number")
+    if not user_id or not event_id or not slot_number:
+        return jsonify({"success": False, "error": "Missing user_id, event_id, or slot_number"}), 400
+        
+    success, res = join_free_fire_event(user_id, event_id, slot_number)
+    if success:
+        return jsonify({"success": True, "message": res}), 200
+    else:
+        if res == "profile_incomplete":
+            return jsonify({"success": False, "error": "profile_incomplete", "message": "Please configure your Free Fire username and UID in your Profile to join."}), 400
+        return jsonify({"success": False, "error": res, "message": res}), 400
 
 
 # --- SOCKET.IO EVENT HANDLERS ---

@@ -92,6 +92,7 @@ def get_admin_keyboard():
             InlineKeyboardButton("📥 Pending Deposits", callback_data="admin_pending_dep"),
             InlineKeyboardButton("📤 Pending Redeems", callback_data="admin_pending_red")
         ],
+        [InlineKeyboardButton("🏆 Free Fire Events", callback_data="admin_ff_events")],
         [InlineKeyboardButton("📣 Broadcast Message", callback_data="admin_broadcast")],
         [InlineKeyboardButton("↩️ Back to Main Menu", callback_data="main_menu")]
     ])
