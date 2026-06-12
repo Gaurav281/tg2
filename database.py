@@ -720,10 +720,13 @@ def join_car_event(user_id, event_id):
     if len(cyc.get("participants", [])) >= cyc["max_participants"]:
         return False, "This event is currently full. Please wait for the next cycle."
         
-    # Check if user already has an active unplayed participation in this cycle
-    unplayed = [p for p in cyc.get("participants", []) if p["user_id"] == user_id and not p["played"]]
-    if unplayed:
-        return True, {"message": "Already joined, resume play", "cycle_id": str(cyc["_id"])}
+    # Check if user already has joined in this cycle (either played or unplayed)
+    joined_participant = next((p for p in cyc.get("participants", []) if p["user_id"] == user_id), None)
+    if joined_participant:
+        if not joined_participant["played"]:
+            return True, {"message": "Already joined, resume play", "cycle_id": str(cyc["_id"])}
+        else:
+            return False, "You have already completed your game for this event cycle. Please wait for the next cycle to start."
         
     # Deduct entry fee
     fee = cyc["entry_fee"]
