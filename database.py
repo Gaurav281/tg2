@@ -29,7 +29,25 @@ free_fire_events_col = db["free_fire_events"]
 
 def get_user(user_id):
     """Retrieve user details by Telegram user_id."""
-    return users_col.find_one({"_id": int(user_id)})
+    user = users_col.find_one({"_id": int(user_id)})
+    if user:
+        # Guarantee balance fields exist for legacy compatibility
+        changed = False
+        if "deposit_balance" not in user:
+            user["deposit_balance"] = round(user.get("balance", 0.0) - user.get("winning_balance", 0.0), 2)
+            changed = True
+        if "winning_balance" not in user:
+            user["winning_balance"] = 0.0
+            changed = True
+        if changed:
+            users_col.update_one(
+                {"_id": int(user_id)},
+                {"$set": {
+                    "deposit_balance": round(max(0.0, user["deposit_balance"]), 2),
+                    "winning_balance": round(max(0.0, user["winning_balance"]), 2)
+                }}
+            )
+    return user
 
 def create_user(user_id, username, first_name, referred_by=None):
     """Create a new user with 0.5 signup bonus and process referral link if any."""
@@ -52,6 +70,8 @@ def create_user(user_id, username, first_name, referred_by=None):
         "username": username or f"User_{user_id}",
         "first_name": first_name or "",
         "balance": 0.0,
+        "deposit_balance": 0.0,
+        "winning_balance": 0.0,
         "free_fire_username": "",
         "free_fire_uid": "",
         "streak": 0,
@@ -88,10 +108,11 @@ def create_user(user_id, username, first_name, referred_by=None):
 
 def update_balance(user_id, amount, tx_type, details=None):
     """
-    Atomically update user balance and log a transaction.
+    Atomically update user balance (total, deposit, winning) and log a transaction.
     If amount is negative, checks that the user has sufficient balance (no overdraft).
     Returns (success: bool, new_balance: float).
     """
+    import time
     user_id = int(user_id)
     amount = round(float(amount), 2)
     
@@ -99,22 +120,85 @@ def update_balance(user_id, amount, tx_type, details=None):
         user = get_user(user_id)
         return True, user["balance"] if user else 0.0
 
-    # Ensure no negative balance.
-    # If deducting (amount < 0), balance must be >= abs(amount).
-    query = {"_id": user_id}
+    # Retrieve current user to perform calculations
+    user = get_user(user_id)
+    if not user:
+        return False, 0.0
+
+    deposit_bal = round(user.get("deposit_balance", 0.0), 2)
+    winning_bal = round(user.get("winning_balance", 0.0), 2)
+    total_bal = round(user.get("balance", 0.0), 2)
+
+    # Check case by case
     if amount < 0:
-        query["balance"] = {"$gte": abs(amount)}
+        deduct_amt = abs(amount)
+        if tx_type == "redeem":
+            # For withdrawals, user can ONLY withdraw from winning_balance
+            if winning_bal < deduct_amt:
+                return False, 0.0
+            
+            # Atomically update by checking winning_balance in query
+            new_winning = round(winning_bal - deduct_amt, 2)
+            new_total = round(total_bal - deduct_amt, 2)
+            
+            query = {"_id": user_id, "winning_balance": {"$gte": deduct_amt}}
+            update = {"$set": {
+                "winning_balance": new_winning,
+                "balance": new_total
+            }}
+        else:
+            # For other fees (match_fee, car_event_fee, free_fire_fee, admin_remove)
+            if total_bal < deduct_amt:
+                return False, 0.0
+                
+            # Deduct from deposit_balance first, then winning_balance
+            if deposit_bal >= deduct_amt:
+                new_deposit = round(deposit_bal - deduct_amt, 2)
+                new_winning = winning_bal
+            else:
+                remainder = round(deduct_amt - deposit_bal, 2)
+                new_deposit = 0.0
+                new_winning = round(winning_bal - remainder, 2)
+                
+            new_total = round(total_bal - deduct_amt, 2)
+            
+            query = {"_id": user_id, "balance": {"$gte": deduct_amt}}
+            update = {"$set": {
+                "deposit_balance": new_deposit,
+                "winning_balance": new_winning,
+                "balance": new_total
+            }}
+    else:
+        # Addition (amount > 0)
+        # Check transaction type:
+        # If it is a deposit or admin manually adding: added to deposit_balance
+        if tx_type in ["deposit", "admin_add", "match_refund", "car_event_refund", "free_fire_refund"]:
+            new_deposit = round(deposit_bal + amount, 2)
+            new_winning = winning_bal
+        else:
+            # rewards: streak_reward, task_reward, referral_reward, match_win, car_event_win, free_fire_win
+            new_deposit = deposit_bal
+            new_winning = round(winning_bal + amount, 2)
+            
+        new_total = round(total_bal + amount, 2)
         
-    # Atomically update balance
-    user = users_col.find_one_and_update(
+        query = {"_id": user_id}
+        update = {"$set": {
+            "deposit_balance": new_deposit,
+            "winning_balance": new_winning,
+            "balance": new_total
+        }}
+
+    # Perform atomic update
+    updated_user = users_col.find_one_and_update(
         query,
-        {"$inc": {"balance": amount}},
+        update,
         return_document=True
     )
     
-    if not user:
+    if not updated_user:
         return False, 0.0
-        
+
     # Log transaction
     create_transaction(
         user_id=user_id,
@@ -124,12 +208,7 @@ def update_balance(user_id, amount, tx_type, details=None):
         details=details
     )
     
-    # If the transaction is a deposit or mission related, trigger missions check
-    if tx_type == "deposit" and amount > 0:
-        # Deposit is manually approved, so we update the missions when APPROVED, not here
-        pass
-        
-    return True, round(user["balance"], 2)
+    return True, round(updated_user["balance"], 2)
 
 def create_transaction(user_id, tx_type, amount, status, details=None):
     """Create a transaction log."""
@@ -164,7 +243,7 @@ def approve_deposit(tx_id):
     # Atomically add money to user
     users_col.update_one(
         {"_id": user_id},
-        {"$inc": {"balance": final_amount}}
+        {"$inc": {"balance": final_amount, "deposit_balance": final_amount}}
     )
     
     # Mark transaction as approved
@@ -221,7 +300,7 @@ def reject_redeem(tx_id):
     # Refund user wallet
     users_col.update_one(
         {"_id": user_id},
-        {"$inc": {"balance": amount}}
+        {"$inc": {"balance": amount, "winning_balance": amount}}
     )
     
     # Update transaction status
@@ -243,7 +322,7 @@ def cancel_redeem_by_user(user_id):
     # Refund user wallet
     users_col.update_one(
         {"_id": int(user_id)},
-        {"$inc": {"balance": abs(tx["amount"])}}
+        {"$inc": {"balance": abs(tx["amount"]), "winning_balance": abs(tx["amount"])}}
     )
     
     # Mark transaction as rejected/cancelled

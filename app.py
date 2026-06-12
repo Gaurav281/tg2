@@ -238,6 +238,8 @@ def get_user_api(user_id):
             "username": user.get("username", ""),
             "first_name": user.get("first_name", ""),
             "balance": round(user.get("balance", 0.0), 2),
+            "deposit_balance": round(user.get("deposit_balance", 0.0), 2),
+            "winning_balance": round(user.get("winning_balance", 0.0), 2),
             "streak": user.get("streak", 0),
             "last_streak_claim": user.get("last_streak_claim").isoformat() if user.get("last_streak_claim") else None,
             "referrals_count": user.get("referrals_count", 0),
