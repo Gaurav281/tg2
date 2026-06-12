@@ -30,7 +30,7 @@ import bot.handlers  # Register Telegram commands and callback query handlers at
 
 # Signal handler for clean exit on Ctrl+C (SIGINT/SIGTERM) in the main thread
 def signal_handler(sig, frame):
-    print("\nShutting down Hand Cricket Arena...")
+    print("\nShutting down Battle Play...")
     try:
         # Schedule the stop coroutine on the running background event loop cleanly
         future = asyncio.run_coroutine_threadsafe(bot_client.stop(), bot_loop)

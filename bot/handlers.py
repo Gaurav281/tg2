@@ -459,7 +459,7 @@ async def btn_invite_callback(client: Client, query: CallbackQuery):
         f"Total Referrals: **{ref_count}**\n\n"
         f"🔗 **Your Invite Link:**\n`{referral_link}`"
     )
-    share_url = f"https://t.me/share/url?url={urllib.parse.quote(referral_link)}&text={urllib.parse.quote('Join Hand Cricket Arena and earn signup bonuses! 🏏')}"
+    share_url = f"https://t.me/share/url?url={urllib.parse.quote(referral_link)}&text={urllib.parse.quote('Join Battle Play and play games! 🎮')}"
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📤 Share Invite Link", url=share_url)],
         [InlineKeyboardButton("↩️ Back to Menu", callback_data="main_menu")]
