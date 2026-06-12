@@ -14,7 +14,7 @@ def get_backend_url():
 
 def get_bot_username():
     import os
-    return os.getenv("BOT_USERNAME", "buckky_bot")
+    return os.getenv("BOT_USERNAME", "battleplay_bot")
 
 def create_or_get_task(user_id):
     """
