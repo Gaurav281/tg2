@@ -885,6 +885,9 @@ def get_free_fire_events():
             "max_participants": ev["max_participants"],
             "start_time": ev["start_time"],
             "end_time": ev["end_time"],
+            "date": ev.get("date", "2026-06-12"),
+            "room_id": ev.get("room_id", ""),
+            "room_password": ev.get("room_password", ""),
             "joined_count": joined_count,
             "slots": slots
         })
@@ -952,6 +955,77 @@ def join_free_fire_event(user_id, event_id, slot_number):
     
     return True, "Successfully joined Free Fire tournament"
 
+def declare_free_fire_results(event_id, kills_data):
+    """
+    Distributes rewards to registered Free Fire tournament participants based on kills.
+    kills_data: dict of slot_number (str) -> kills (int)
+    """
+    try:
+        ev_id = ObjectId(event_id)
+    except Exception:
+        return False, "Invalid event ID"
+        
+    ev = free_fire_events_col.find_one({"_id": ev_id})
+    if not ev:
+        return False, "Free Fire tournament not found"
+        
+    slots = ev.get("slots", {})
+    prize_per_kill = ev.get("prize_per_kill", 4.0)
+    
+    from bot.client import bot as bot_client
+    import asyncio
+    
+    # Process each reward
+    for slot_key, kills in kills_data.items():
+        slot_key = str(slot_key)
+        occupant = slots.get(slot_key)
+        if occupant:
+            user_id = occupant["user_id"]
+            prize_amount = float(kills) * prize_per_kill
+            
+            if prize_amount > 0:
+                update_balance(
+                    user_id=user_id,
+                    amount=prize_amount,
+                    tx_type="match_win",
+                    details={
+                        "game": "free_fire",
+                        "event_id": event_id,
+                        "slot": slot_key,
+                        "kills": kills,
+                        "prize_per_kill": prize_per_kill
+                    }
+                )
+            
+            # Send bot notification
+            try:
+                notification_text = (
+                    f"🏆 **Free Fire Tournament Results declared!**\n\n"
+                    f"Event: {ev['mode']} - {ev['map']} ({ev.get('date', 'N/A')})\n"
+                    f"Character Slot: **#{slot_key}**\n"
+                    f"Kills: **{kills}**\n"
+                    f"💰 **Prize Won:** Rs {prize_amount:.2f} (Rs {prize_per_kill:.2f} per kill)\n\n"
+                    f"Amount credited to your wallet balance."
+                )
+                asyncio.run_coroutine_threadsafe(
+                    bot_client.send_message(user_id, notification_text),
+                    asyncio.get_event_loop()
+                )
+            except Exception as e:
+                print(f"Failed to notify user {user_id}: {e}")
+                
+    # Reset event slots and clear Room ID / Password so it restarts cycle
+    reset_slots = {str(i): None for i in range(1, ev["max_participants"] + 1)}
+    free_fire_events_col.update_one(
+        {"_id": ev_id},
+        {"$set": {
+            "slots": reset_slots,
+            "room_id": "",
+            "room_password": ""
+        }}
+    )
+    return True, "Results declared and rewards distributed successfully!"
+
 # --- Seeding Routine ---
 def seed_default_events():
     """Seed initial Car Game active cycles and Free Fire events if database is empty."""
@@ -983,6 +1057,9 @@ def seed_default_events():
             "max_participants": 50,
             "start_time": "7:00 PM",
             "end_time": "8:00 PM",
+            "date": "2026-06-12",
+            "room_id": "",
+            "room_password": "",
             "slots": {str(i): None for i in range(1, 51)},
             "created_at": datetime.now(IST)
         })

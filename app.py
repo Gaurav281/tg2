@@ -157,6 +157,26 @@ def get_user_api(user_id):
         "status": "pending"
     })
     
+    from database import free_fire_events_col
+    active_ff_room = None
+    try:
+        for ev in free_fire_events_col.find():
+            slots = ev.get("slots", {})
+            for slot_key, slot_val in slots.items():
+                if slot_val and slot_val.get("user_id") == int(user_id):
+                    if ev.get("room_id") and ev.get("room_password"):
+                        active_ff_room = {
+                            "mode": ev["mode"],
+                            "map": ev["map"],
+                            "room_id": ev["room_id"],
+                            "room_password": ev["room_password"],
+                            "date": ev.get("date", ""),
+                            "time": ev.get("start_time", "")
+                        }
+                    break
+    except Exception as ex:
+        print(f"Error checking active FF rooms: {ex}")
+
     from matchmaking import matchmaker
     paid_playing = matchmaker.get_paid_playing_count()
     match_id = matchmaker.user_to_match.get(int(user_id))
@@ -182,7 +202,8 @@ def get_user_api(user_id):
             "pending_deposits": pending_deposits,
             "pending_redeems": pending_redeems,
             "free_fire_username": user.get("free_fire_username", ""),
-            "free_fire_uid": user.get("free_fire_uid", "")
+            "free_fire_uid": user.get("free_fire_uid", ""),
+            "active_ff_room": active_ff_room
         },
         "active_users": active_count,
         "paid_playing": paid_playing,
