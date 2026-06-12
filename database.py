@@ -490,7 +490,7 @@ def claim_daily_mission(user_id, mission_key):
     # Rewards mapping
     rewards = {
         "matches_3": 0.50,
-        "add_balance": 0.30
+        "add_balance": 0.50
     }
     reward_amt = rewards.get(mission_key, 0.0)
     
