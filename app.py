@@ -114,9 +114,55 @@ def verify_task_route(task_id):
         """
         return render_template_string(html), 400
 
+# Channel join check cache: user_id (int) -> {"joined": bool, "expires_at": float}
+channel_membership_cache = {}
+
+def is_user_member_of_channel(user_id):
+    """Check if the user is a member of the Telegram channel free_fire_play_earn, with caching."""
+    try:
+        user_id_int = int(user_id)
+    except ValueError:
+        return False
+
+    current_time = time.time()
+    cached = channel_membership_cache.get(user_id_int)
+    if cached and cached["expires_at"] > current_time:
+        return cached["joined"]
+
+    joined = False
+    try:
+        async def check_member():
+            try:
+                # bot_client is imported from bot.client
+                member = await bot_client.get_chat_member("free_fire_play_earn", user_id_int)
+                status = str(member.status).lower()
+                if "left" in status or "kicked" in status or "banned" in status:
+                    return False
+                return True
+            except Exception as e:
+                # E.g., UserNotParticipant or generic Pyrogram error
+                print(f"Pyrogram check_member error for {user_id_int}: {e}")
+                return False
+
+        # Schedule the check_member coroutine on the background event loop (bot_loop)
+        future = asyncio.run_coroutine_threadsafe(check_member(), bot_loop)
+        joined = future.result(timeout=4.0)
+    except Exception as e:
+        print(f"Error checking channel membership in thread for {user_id_int}: {e}")
+        joined = False
+
+    # Cache: 10 minutes if joined, 1 minute if not joined (so they can join and get updated quickly)
+    duration = 600 if joined else 60
+    channel_membership_cache[user_id_int] = {
+        "joined": joined,
+        "expires_at": current_time + duration
+    }
+    return joined
+
 @app.route("/api/user/<user_id>", methods=["GET"])
 def get_user_api(user_id):
     """Retrieve user details for React Web App store."""
+    joined_channel = is_user_member_of_channel(user_id)
     user = get_user(user_id)
     if not user:
         username = request.args.get("username")
@@ -203,7 +249,8 @@ def get_user_api(user_id):
             "pending_redeems": pending_redeems,
             "free_fire_username": user.get("free_fire_username", ""),
             "free_fire_uid": user.get("free_fire_uid", ""),
-            "active_ff_room": active_ff_room
+            "active_ff_room": active_ff_room,
+            "joined_channel": joined_channel
         },
         "active_users": active_count,
         "paid_playing": paid_playing,
