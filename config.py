@@ -7,7 +7,7 @@ load_dotenv(override=True)
 class Config:
     API_ID = int(os.getenv("API_ID", 26275561))
     API_HASH = os.getenv("API_HASH", "cec50cf5848bfe6794dc9a934b47cf62")
-    BOT_TOKEN = os.getenv("BOT_TOKEN", "6216446524:AAHUoHJV04sC6qPlr9EbFNFmVvbbjonPd1E")
+    BOT_TOKEN = os.getenv("BOT_TOKEN", "8846126721:AAF5djjanPPtP1PACa0geJqtUNweRNK5Vhc")
     MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://gauravpushpa28_db_user:c6o6bVkuzF9CdGCB@cluster0.iwh6rby.mongodb.net/hand_cricket_bot?appName=Cluster0")
     ADMIN_ID = int(os.getenv("ADMIN_ID", 5802486388))
     ADMIN_UPI = os.getenv("ADMIN_UPI", "gauravpushpa28@okaxis")
