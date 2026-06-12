@@ -514,6 +514,49 @@ def claim_daily_mission(user_id, mission_key):
     update_balance(user_id, reward_amt, "streak_reward", {"mission": mission_key})
     return True, reward_amt
 
+def check_played_paid_match_today(user_id):
+    """Checks if the user has played or registered for any paid match today (Hand Cricket, Car Game, or Free Fire)."""
+    user_id = int(user_id)
+    start_of_today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_today = start_of_today + timedelta(days=1)
+    
+    # 1. Check Hand Cricket paid matches today
+    paid_match = matches_col.find_one({
+        "type": "paid",
+        "created_at": {"$gte": start_of_today, "$lt": end_of_today},
+        "$or": [
+            {"player_a.user_id": user_id},
+            {"player_b.user_id": user_id}
+        ]
+    })
+    if paid_match:
+        return True
+        
+    # 2. Check Car Game paid events joined today (entry_fee > 0)
+    paid_car = car_event_cycles_col.find_one({
+        "entry_fee": {"$gt": 0},
+        "participants": {
+            "$elemMatch": {
+                "user_id": user_id,
+                "joined_at": {"$gte": start_of_today, "$lt": end_of_today}
+            }
+        }
+    })
+    if paid_car:
+        return True
+        
+    # 3. Check Free Fire paid tournaments joined today (via transaction log for free_fire_fee)
+    paid_ff = transactions_col.find_one({
+        "user_id": user_id,
+        "type": "free_fire_fee",
+        "amount": {"$lt": 0},
+        "created_at": {"$gte": start_of_today, "$lt": end_of_today}
+    })
+    if paid_ff:
+        return True
+        
+    return False
+
 def claim_daily_streak(user_id):
     """Claim daily streak reward."""
     user_id = int(user_id)
@@ -522,18 +565,7 @@ def claim_daily_streak(user_id):
         return False, "User not found"
         
     # Check if user has played at least 1 paid match today (IST)
-    start_of_today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
-    end_of_today = start_of_today + timedelta(days=1)
-    
-    played_paid_today = matches_col.find_one({
-        "type": "paid",
-        "created_at": {"$gte": start_of_today, "$lt": end_of_today},
-        "$or": [
-            {"player_a.user_id": user_id},
-            {"player_b.user_id": user_id}
-        ]
-    })
-    
+    played_paid_today = check_played_paid_match_today(user_id)
     if not played_paid_today:
         return False, "You must play at least 1 paid match today to claim your daily streak reward."
         
@@ -1114,7 +1146,8 @@ def seed_default_events():
     # Seed Car Game Event 1 & 2 cycles
     for eid, fee, participants, prizes in [
         (1, 1.0, 10, {"1": 4.0, "2": 3.0, "3": 1.0}),
-        (2, 3.0, 20, {"1": 12.0, "2": 9.0, "3": 7.0, "4": 6.0, "5": 5.0, "6": 4.0, "7": 3.0, "8": 2.0})
+        (2, 3.0, 20, {"1": 12.0, "2": 9.0, "3": 7.0, "4": 6.0, "5": 5.0, "6": 4.0, "7": 3.0, "8": 2.0}),
+        (3, 0.0, 10, {"1": 1.0})
     ]:
         active = car_event_cycles_col.find_one({"event_id": eid, "status": "active"})
         if not active:
