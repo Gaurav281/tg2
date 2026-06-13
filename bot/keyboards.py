@@ -38,7 +38,7 @@ def get_start_keyboard(user_id, is_admin=False):
     
     # Play Match
     if states.get("play_match", True):
-        keyboard.append([InlineKeyboardButton("🏏 Play Match (Paid)", web_app=WebAppInfo(url=web_url))])
+        keyboard.append([InlineKeyboardButton("Play Match", web_app=WebAppInfo(url=web_url))])
         
     # Challenge & Invite
     row2 = []
@@ -74,7 +74,7 @@ def get_start_keyboard(user_id, is_admin=False):
 def get_admin_manage_buttons_keyboard(button_states):
     keyboard = []
     button_labels = {
-        "play_match": "🏏 Play Match",
+        "play_match": "Play Match",
         "challenge": "👥 Challenge Friend",
         "invite": "✉️ Invite Friend",
         "add_coin": "➕ Add Coin",
