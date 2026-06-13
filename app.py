@@ -551,8 +551,6 @@ def handle_connect():
                     socketio.emit("match_update", match.to_dict(), to=match_id)
                     # Also send directly to the connecting client's session ID to guarantee update
                     emit("match_update", match.to_dict(), to=request.sid)
-        except ValueError:
-            pass
 
 @socketio.on("disconnect")
 def handle_disconnect():
