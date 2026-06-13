@@ -207,8 +207,9 @@ async def start_handler(client: Client, message: Message):
     is_admin = (user_id == Config.ADMIN_ID)
     
     welcome_text = (
-        f"👋 **Welcome to Hand Cricket Game, {first_name}!**\n\n"
-        f"Play the classic Hand Cricket game right inside Telegram and earn real money!\n\n"
+        f"👋 **Welcome to Battle Play, {first_name}!**\n\n"
+        f"Play games right inside Telegram and earn real money!\n\n"
+        f"🆔 **Your User ID:** `{user_id}`\n"
         f"💰 **Wallet Balance:** Rs {balance:.2f}\n\n"
         f"Select an option below to get started:"
     )
