@@ -229,7 +229,7 @@ async def help_handler(client: Client, message: Message):
     )
     await clean_send(client, user_id, help_text, reply_markup=get_start_keyboard(user_id, user_id == Config.ADMIN_ID))
 
-@bot.on_callback_query(filters.regex("btn_join_tg"))
+@bot.on_callback_query(filters.regex(r"^btn_join_tg$"))
 async def btn_join_tg_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     text = (
@@ -304,7 +304,7 @@ async def main_menu_callback(client: Client, query: CallbackQuery):
     )
 
 # --- ADD COIN FLOW ---
-@bot.on_callback_query(filters.regex("btn_add_coin"))
+@bot.on_callback_query(filters.regex(r"^btn_add_coin$"))
 async def btn_add_coin_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     user = get_user(user_id)
@@ -351,7 +351,7 @@ async def deposit_pack_callback(client: Client, query: CallbackQuery):
     )
 
 # --- REDEEM COIN FLOW ---
-@bot.on_callback_query(filters.regex("btn_redeem_coin"))
+@bot.on_callback_query(filters.regex(r"^btn_redeem_coin$"))
 async def btn_redeem_coin_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     user = get_user(user_id)
@@ -418,7 +418,7 @@ async def task_command_handler(client: Client, message: Message):
     await clean_user_history(client, user_id, message.id)
     await trigger_task(client, user_id)
 
-@bot.on_callback_query(filters.regex("btn_task"))
+@bot.on_callback_query(filters.regex(r"^btn_task$"))
 async def btn_task_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     await trigger_task(client, user_id, callback_query=query)
@@ -471,24 +471,26 @@ async def trigger_task(client: Client, user_id, callback_query: CallbackQuery = 
         await clean_send(client, user_id, instructions, reply_markup=keyboard)
 
 # --- REFERRAL & CHALLENGE CALLBACKS ---
-@bot.on_callback_query(filters.regex("btn_invite"))
+@bot.on_callback_query(filters.regex(r"^btn_invite$"))
 async def btn_invite_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     user = get_user(user_id)
     bot_uname = get_bot_username()
     
     referral_link = f"https://t.me/{bot_uname}?start=invite_{user_id}"
-    ref_count = user.get("referrals_count", 0) if user else 0
     invite_code = user.get("invite_code", "N/A") if user else "N/A"
+    
+    from database import get_valid_referrals_count, users_col
+    total_invites = users_col.count_documents({"referred_by": user_id})
+    valid_invites = get_valid_referrals_count(user_id)
     
     text = (
         f"✉️ **Invite Friends & Earn!**\n\n"
-        f"Invite your friends to play. You will earn rewards for milestones which you can claim in the Web App Rewards Tab:\n\n"
-        f"• Invite 1 Friend: **Rs 0.50**\n"
-        f"• Invite 5 Friends: **Rs 2.00**\n"
-        f"• Invite 10 Friends: **Rs 5.00**\n\n"
+        f"Invite your friends to play and claim Rs 1.00 per invite when the invited user deposits a minimum of Rs 10.00.\n"
+        f"You can claim your rewards in the Web App Rewards Tab.\n\n"
         f"📊 **Your Referral Stats:**\n"
-        f"Total Referrals: **{ref_count}**\n\n"
+        f"• Total Invites: **{total_invites}**\n"
+        f"• Valid Referrals (Min Rs 10 Deposit): **{valid_invites}**\n\n"
         f"🔗 **Your Invite Link:**\n`{referral_link}`\n\n"
         f"🔑 **Your Invite Code:**\n`{invite_code}`"
     )
@@ -499,7 +501,7 @@ async def btn_invite_callback(client: Client, query: CallbackQuery):
     ])
     await query.edit_message_text(text, reply_markup=keyboard)
 
-@bot.on_callback_query(filters.regex("btn_challenge"))
+@bot.on_callback_query(filters.regex(r"^btn_challenge$"))
 async def btn_challenge_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     user = get_user(user_id)

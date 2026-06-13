@@ -246,11 +246,11 @@ def update_balance(user_id, amount, tx_type, details=None):
         # Addition (amount > 0)
         # Check transaction type:
         # If it is a deposit or admin manually adding: added to deposit_balance
-        if tx_type in ["deposit", "admin_add", "match_refund", "car_event_refund", "free_fire_refund", "car_game_free_win", "free_fire_free_win"]:
+        if tx_type in ["deposit", "admin_add", "match_refund", "car_event_refund", "free_fire_refund", "car_game_free_win", "free_fire_free_win", "streak_reward", "referral_reward"]:
             new_deposit = round(deposit_bal + amount, 2)
             new_winning = winning_bal
         else:
-            # rewards: streak_reward, task_reward, referral_reward, match_win, car_event_win, free_fire_win
+            # rewards: task_reward, match_win, car_event_win, free_fire_win
             new_deposit = deposit_bal
             new_winning = round(winning_bal + amount, 2)
             
@@ -744,41 +744,30 @@ def claim_daily_streak(user_id):
     update_balance(user_id, reward_amt, "streak_reward", {"day": streak})
     return True, {"streak": streak, "reward": reward_amt}
 
-def claim_referral_reward(user_id, tier):
-    """Claim reward for milestone invite referrals."""
+def claim_referral_reward(user_id, tier=None):
+    """Claim reward for all unclaimed valid referrals."""
     user_id = int(user_id)
     user = get_user(user_id)
     if not user:
         return False, "User not found"
         
-    claimed = user.get("referral_claimed", [])
-    if tier in claimed:
-        return False, "Referral tier reward already claimed"
-        
-    referral_count = get_valid_referrals_count(user_id)
+    valid_count = get_valid_referrals_count(user_id)
+    claimed_count = user.get("referrals_claimed_count", 0)
     
-    # Milestone requirements
-    milestones = {
-        "1": {"required": 1, "reward": 0.50},
-        "5": {"required": 5, "reward": 2.00},
-        "10": {"required": 10, "reward": 5.00}
-    }
+    new_referrals = valid_count - claimed_count
+    if new_referrals <= 0:
+        return False, "No new referral rewards to claim. Invite more friends and make sure they deposit min Rs 10."
+        
+    reward_amt = round(new_referrals * 1.00, 2)
     
-    if tier not in milestones:
-        return False, "Invalid referral milestone tier"
-        
-    req = milestones[tier]
-    if referral_count < req["required"]:
-        return False, f"Requires at least {req['required']} referrals"
-        
-    # Add reward
+    # Update DB
     users_col.update_one(
         {"_id": user_id},
-        {"$push": {"referral_claimed": tier}}
+        {"$set": {"referrals_claimed_count": valid_count}}
     )
     
-    update_balance(user_id, req["reward"], "referral_reward", {"tier": tier})
-    return True, req["reward"]
+    update_balance(user_id, reward_amt, "referral_reward", {"new_referrals": new_referrals, "before_count": claimed_count, "after_count": valid_count})
+    return True, reward_amt
 
 # --- Admin Panel Finance Stats ---
 def get_finance_stats():
