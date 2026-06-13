@@ -26,6 +26,7 @@ task_stats_col = db["task_stats"]
 feedbacks_col = db["feedbacks"]
 car_event_cycles_col = db["car_event_cycles"]
 free_fire_events_col = db["free_fire_events"]
+cricket_event_cycles_col = db["cricket_event_cycles"]
 
 def get_user(user_id):
     """Retrieve user details by Telegram user_id."""
@@ -785,6 +786,19 @@ def update_free_fire_profile(user_id, ff_username, ff_uid):
 def get_active_car_event_cycles(user_id):
     """Retrieves current active Car Game event cycles and formats for the user."""
     cycles = list(car_event_cycles_col.find({"status": "active"}))
+    
+    # Calculate free event daily play count
+    start_of_today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    free_today_count = car_event_cycles_col.count_documents({
+        "event_id": 1,
+        "participants": {
+            "$elemMatch": {
+                "user_id": int(user_id),
+                "joined_at": {"$gte": start_of_today}
+            }
+        }
+    })
+    
     formatted = []
     for cyc in cycles:
         participants = cyc.get("participants", [])
@@ -812,7 +826,8 @@ def get_active_car_event_cycles(user_id):
             "user_joined": user_joined,
             "user_played": user_played,
             "user_score": user_score,
-            "status": cyc["status"]
+            "status": cyc["status"],
+            "free_today_count": free_today_count
         })
     return formatted
 
@@ -838,6 +853,21 @@ def join_car_event(user_id, event_id):
             return True, {"message": "Already joined, resume play", "cycle_id": str(cyc["_id"])}
         else:
             return False, "You have already completed your game for this event cycle. Please wait for the next cycle to start."
+            
+    # Check daily limit for free event (Event 1)
+    if int(event_id) == 1:
+        start_of_today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+        played_today_count = car_event_cycles_col.count_documents({
+            "event_id": 1,
+            "participants": {
+                "$elemMatch": {
+                    "user_id": user_id,
+                    "joined_at": {"$gte": start_of_today}
+                }
+            }
+        })
+        if played_today_count >= 5:
+            return False, "You can only play 5 free entry car events in a day."
         
     # Deduct entry fee
     fee = cyc["entry_fee"]
@@ -892,7 +922,8 @@ def submit_car_score(user_id, event_id, score):
         {
             "$set": {
                 f"participants.{unplayed_idx}.score": score,
-                f"participants.{unplayed_idx}.played": True
+                f"participants.{unplayed_idx}.played": True,
+                f"participants.{unplayed_idx}.played_at": datetime.now(IST)
             }
         }
     )
@@ -919,8 +950,8 @@ def resolve_car_event_cycle(cycle_id):
         return
         
     participants = [p for p in cyc.get("participants", []) if p["played"]]
-    # Sort by score descending
-    participants.sort(key=lambda x: x["score"], reverse=True)
+    # Sort by score descending, then played_at/joined_at ascending (earlier wins tie-breaker)
+    participants.sort(key=lambda x: (-x["score"], x.get("played_at", x.get("joined_at", datetime.now(IST)))))
     
     # Prize mappings
     prizes = cyc["prizes"]
@@ -983,6 +1014,213 @@ def resolve_car_event_cycle(cycle_id):
         "entry_fee": cyc["entry_fee"],
         "max_participants": cyc["max_participants"],
         "prizes": cyc["prizes"],
+        "status": "active",
+        "participants": [],
+        "created_at": datetime.now(IST)
+    })
+
+# --- Hand Cricket Cycle Operations ---
+def get_active_cricket_cycle(user_id):
+    """Retrieves current active Hand Cricket paid cycle and formats for the user."""
+    cyc = cricket_event_cycles_col.find_one({"status": "active"})
+    if not cyc:
+        # Auto seed if missing
+        cyc = {
+            "event_id": 1,
+            "entry_fee": 1.0,
+            "max_participants": 3,
+            "prizes": {"1": 2.5},
+            "status": "active",
+            "participants": [],
+            "created_at": datetime.now(IST)
+        }
+        cricket_event_cycles_col.insert_one(cyc)
+        
+    participants = cyc.get("participants", [])
+    unplayed = [p for p in participants if p["user_id"] == int(user_id) and not p["played"]]
+    played_list = [p for p in participants if p["user_id"] == int(user_id) and p["played"]]
+    
+    user_joined = len(unplayed) > 0
+    user_played = len(unplayed) == 0 and len(played_list) > 0
+    
+    user_score = 0
+    if unplayed:
+        user_score = unplayed[0].get("score", 0)
+    elif played_list:
+        user_score = max(p.get("score", 0) for p in played_list)
+        
+    return {
+        "id": str(cyc["_id"]),
+        "entry_fee": cyc["entry_fee"],
+        "max_participants": cyc["max_participants"],
+        "prizes": cyc["prizes"],
+        "joined_count": len(participants),
+        "user_joined": user_joined,
+        "user_played": user_played,
+        "user_score": user_score,
+        "status": cyc["status"],
+        "participants": [
+            {
+                "username": p["username"],
+                "score": p["score"],
+                "played": p["played"]
+            } for p in participants
+        ]
+    }
+
+def join_cricket_event(user_id):
+    """Allows a user to join the active Hand Cricket cycle by paying the entry fee."""
+    user_id = int(user_id)
+    user = get_user(user_id)
+    if not user:
+        return False, "User not found"
+        
+    cyc = cricket_event_cycles_col.find_one({"status": "active"})
+    if not cyc:
+        return False, "Active cricket cycle not found"
+        
+    # Check if full
+    if len(cyc.get("participants", [])) >= cyc["max_participants"]:
+        return False, "This match cycle is full. Please wait for the next cycle."
+        
+    # Check if user already joined
+    joined_participant = next((p for p in cyc.get("participants", []) if p["user_id"] == user_id), None)
+    if joined_participant:
+        if not joined_participant["played"]:
+            return True, "Already joined"
+        else:
+            return False, "You have already completed your game for this event cycle. Please wait for the next cycle to start."
+            
+    # Deduct fee
+    fee = cyc["entry_fee"]
+    success, new_bal = update_balance(
+        user_id=user_id,
+        amount=-fee,
+        tx_type="match_fee",
+        details={"status": "joined_cycle", "cycle_id": str(cyc["_id"])}
+    )
+    if not success:
+        return False, "Insufficient balance"
+        
+    # Add participant
+    participant = {
+        "user_id": user_id,
+        "username": user.get("first_name") or user.get("username") or f"User {user_id}",
+        "score": 0,
+        "played": False,
+        "joined_at": datetime.now(IST)
+    }
+    cricket_event_cycles_col.update_one(
+        {"_id": cyc["_id"]},
+        {"$push": {"participants": participant}}
+    )
+    return True, "Joined successfully"
+
+def submit_cricket_score(user_id, score):
+    """Submits the score for the user's Hand Cricket paid match cycle."""
+    user_id = int(user_id)
+    score = int(score)
+    cyc = cricket_event_cycles_col.find_one({"status": "active"})
+    if not cyc:
+        return False, "Active cricket cycle not found"
+        
+    participants = cyc.get("participants", [])
+    unplayed_idx = -1
+    for idx, p in enumerate(participants):
+        if p["user_id"] == user_id and not p["played"]:
+            unplayed_idx = idx
+            break
+            
+    if unplayed_idx == -1:
+        return False, "No active unplayed participation found for this cycle"
+        
+    cricket_event_cycles_col.update_one(
+        {"_id": cyc["_id"], f"participants.{unplayed_idx}.user_id": user_id},
+        {
+            "$set": {
+                f"participants.{unplayed_idx}.score": score,
+                f"participants.{unplayed_idx}.played": True,
+                f"participants.{unplayed_idx}.played_at": datetime.now(IST)
+            }
+        }
+    )
+    
+    # Increment daily mission progress
+    update_daily_mission_progress(user_id, matches_played=1)
+    
+    # Reload cycle to check if all participants have completed their game
+    cyc = cricket_event_cycles_col.find_one({"_id": cyc["_id"]})
+    completed_participants = [p for p in cyc.get("participants", []) if p["played"]]
+    
+    if len(completed_participants) >= cyc["max_participants"]:
+        resolve_cricket_event_cycle(cyc["_id"])
+        
+    return True, "Score submitted successfully"
+
+def resolve_cricket_event_cycle(cycle_id):
+    """Evaluates rankings, distributes prize pools, and restarts the cricket cycle."""
+    cyc = cricket_event_cycles_col.find_one({"_id": ObjectId(cycle_id), "status": "active"})
+    if not cyc:
+        return
+        
+    participants = [p for p in cyc.get("participants", []) if p["played"]]
+    # Sort by score descending, then played_at/joined_at ascending (earlier wins tie-breaker)
+    participants.sort(key=lambda x: (-x["score"], x.get("played_at", x.get("joined_at", datetime.now(IST)))))
+    
+    prizes = cyc["prizes"]
+    
+    for rank_idx, p in enumerate(participants):
+        rank = rank_idx + 1
+        prize = float(prizes.get(str(rank), 0.0))
+        
+        print(f"Resolving Cricket Cycle, Rank {rank}: User {p['user_id']} with score {p['score']} wins Rs {prize}")
+        
+        if prize > 0:
+            update_balance(
+                user_id=p["user_id"],
+                amount=prize,
+                tx_type="match_win",
+                details={
+                    "game": "hand_cricket",
+                    "cycle_id": str(cycle_id),
+                    "rank": rank,
+                    "score": p["score"]
+                }
+            )
+            
+        # Send Pyrogram notification
+        from bot.client import bot as bot_client
+        try:
+            notification_text = (
+                f"🏏 **Hand Cricket Paid Match Results!**\n\n"
+                f"Congratulations! You ranked **#{rank}** out of {cyc['max_participants']} players with a score of **{p['score']}**.\n"
+                f"💰 **Prize Won:** Rs {prize:.2f}\n\n"
+                f"The event has restarted. Play again to win more!"
+            ) if prize > 0 else (
+                f"🏏 **Hand Cricket Paid Match Results!**\n\n"
+                f"You ranked **#{rank}** out of {cyc['max_participants']} players with a score of **{p['score']}**.\n"
+                f"Better luck next time! Play again to win more!"
+            )
+            import asyncio
+            asyncio.run_coroutine_threadsafe(
+                bot_client.send_message(p["user_id"], notification_text),
+                asyncio.get_event_loop()
+            )
+        except Exception as e:
+            print(f"Failed to send cricket result notification to user {p['user_id']}: {e}")
+            
+    # Mark cycle completed
+    cricket_event_cycles_col.update_one(
+        {"_id": ObjectId(cycle_id)},
+        {"$set": {"status": "completed", "resolved_at": datetime.now(IST)}}
+    )
+    
+    # Spawn new cycle
+    cricket_event_cycles_col.insert_one({
+        "event_id": 1,
+        "entry_fee": 1.0,
+        "max_participants": 3,
+        "prizes": prizes,
         "status": "active",
         "participants": [],
         "created_at": datetime.now(IST)
@@ -1193,6 +1431,19 @@ def seed_default_events():
             "room_id": "",
             "room_password": "",
             "slots": {str(i): None for i in range(1, 51)},
+            "created_at": datetime.now(IST)
+        })
+        
+    # Seed Cricket Cycle
+    cc1 = cricket_event_cycles_col.find_one({"status": "active"})
+    if not cc1:
+        cricket_event_cycles_col.insert_one({
+            "event_id": 1,
+            "entry_fee": 1.0,
+            "max_participants": 3,
+            "prizes": {"1": 2.5},
+            "status": "active",
+            "participants": [],
             "created_at": datetime.now(IST)
         })
 

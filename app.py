@@ -20,7 +20,8 @@ from database import (
     get_match_history, get_leaderboard, get_user_rank, claim_daily_streak,
     claim_daily_mission, claim_referral_reward, save_match_result, tasks_col,
     save_feedback, update_free_fire_profile, get_active_car_event_cycles,
-    join_car_event, submit_car_score, get_free_fire_events, join_free_fire_event
+    join_car_event, submit_car_score, get_free_fire_events, join_free_fire_event,
+    get_active_cricket_cycle, join_cricket_event, submit_cricket_score
 )
 from matchmaking import matchmaker
 from game import HandCricketMatch
@@ -417,6 +418,17 @@ def update_profile_route(user_id):
     update_free_fire_profile(user_id, ff_username, ff_uid)
     return jsonify({"success": True, "message": "Profile updated successfully"}), 200
 
+@app.route("/api/cricket/event", methods=["GET"])
+def get_cricket_event_route():
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Missing user_id"}), 400
+    try:
+        event = get_active_cricket_cycle(user_id)
+        return jsonify({"success": True, "event": event}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route("/api/car-game/events", methods=["GET"])
 def get_car_events_route():
     user_id = request.args.get("user_id")
@@ -576,46 +588,44 @@ def handle_join_matchmaking(data):
         emit("matchmaking_error", {"message": "User is banned or not registered."})
         return
         
-    if user.get("balance", 0.0) < 5.0:
-        emit("matchmaking_error", {"message": "Insufficient balance! Paid match requires Rs 5.00."})
+    # Check if they are already playing an active match
+    if user_id in matchmaker.user_to_match:
+        existing_match_id = matchmaker.user_to_match[user_id]
+        match = matchmaker.get_match(existing_match_id)
+        if match and match.status != "completed":
+            join_room(existing_match_id)
+            emit("match_found", match.to_dict())
+            return
+            
+    # Check balance >= 1.00
+    if user.get("balance", 0.0) < 1.0:
+        emit("matchmaking_error", {"message": "Insufficient balance! Paid match requires Rs 1.00."})
         return
         
-    # Deduct match fee (Rs 5.00) atomically
-    success, new_bal = update_balance(user_id, -5.0, "match_fee", {"status": "matchmaking"})
+    # Try to join active cricket cycle
+    success, msg = join_cricket_event(user_id)
     if not success:
-        emit("matchmaking_error", {"message": "Failed to lock match fee."})
+        emit("matchmaking_error", {"message": msg})
         return
         
-    # Add to matchmaking
-    res = matchmaker.add_to_queue(user_id, username, request.sid)
+    # Start match against the bot immediately!
+    match = HandCricketMatch(
+        player_a_id=user_id,
+        player_a_name=username,
+        player_b_id="bot",
+        player_b_name="Smart Bot",
+        match_type="paid"
+    )
+    match.status = "toss"
+    match.toss_selector = user_id
+    match.toss_choice_pending = True
     
-    if res["status"] == "already_in_match":
-        # Refund fee
-        update_balance(user_id, 5.0, "match_refund", {"reason": "Already in match"})
-        emit("match_update", matchmaker.get_match(res["match_id"]).to_dict())
-        return
-        
-    if res["status"] == "matched":
-        match_id = res["match_id"]
-        join_room(match_id)
-        
-        # Join opponent socket to room
-        opp_sid = res["opponent_socket_id"]
-        socketio.server.enter_room(opp_sid, match_id)
-        
-        # Update match status to matchmaking database if needed (keep in memory)
-        match = matchmaker.get_match(match_id)
-        emit("match_found", match.to_dict(), to=match_id)
-        
-        # Start timer for toss decision
-        start_ball_timer(match_id, match.current_inning, match.current_ball)
-        
-    elif res["status"] == "queued":
-        emit("matchmaking_queued")
-        # Start a thread to check fallback to Bot after 6 seconds
-        t = threading.Timer(6.0, trigger_bot_fallback, args=[user_id])
-        matchmaking_timers[user_id] = t
-        t.start()
+    matchmaker.active_matches[match.match_id] = match
+    matchmaker.user_to_match[user_id] = match.match_id
+    
+    join_room(match.match_id)
+    emit("match_found", match.to_dict())
+    start_ball_timer(match.match_id, match.current_inning, match.current_ball)
 
 def trigger_bot_fallback(user_id):
     """Triggered after 6s waiting in queue. Matches with bot."""
@@ -759,16 +769,6 @@ def process_match_payout(match):
     if match.type == "paid":
         winner_id = match.winner_id
         
-        # Winner Payout (Rs 8.50)
-        if winner_id not in ["draw", "bot"]:
-            update_balance(winner_id, 8.50, "match_win", {"match_id": match.match_id})
-        elif winner_id == "draw":
-            # Refund both players Rs 5.00
-            if match.player_a["user_id"] != "bot":
-                update_balance(match.player_a["user_id"], 5.00, "match_refund", {"match_id": match.match_id, "reason": "Match Draw"})
-            if match.player_b["user_id"] != "bot":
-                update_balance(match.player_b["user_id"], 5.00, "match_refund", {"match_id": match.match_id, "reason": "Match Draw"})
-                
         # Save results in Database
         save_match_result(
             match_id=match.match_id,
@@ -779,6 +779,11 @@ def process_match_payout(match):
             score_a=match.player_a["score"],
             score_b=match.player_b["score"]
         )
+        
+        # Submit human score to the Hand Cricket tournament cycle
+        user_id = match.player_a["user_id"]
+        score = match.player_a["score"]
+        submit_cricket_score(user_id, score)
     else:
         # Free match / Challenge
         save_match_result(
