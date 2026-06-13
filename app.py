@@ -163,19 +163,32 @@ def is_user_member_of_channel(user_id):
 @app.route("/api/user/<user_id>", methods=["GET"])
 def get_user_api(user_id):
     """Retrieve user details for React Web App store."""
-    joined_channel = is_user_member_of_channel(user_id)
-    user = get_user(user_id)
+    # Try resolving user by unique_id first, then fallback to user_id
+    from database import users_col
+    user = users_col.find_one({"unique_id": str(user_id).strip()})
+    if user:
+        actual_user_id = user["_id"]
+    else:
+        try:
+            actual_user_id = int(user_id)
+            user = get_user(actual_user_id)
+        except ValueError:
+            user = None
+
     if not user:
         username = request.args.get("username")
         first_name = request.args.get("first_name") or request.args.get("firstName")
-        if username or first_name:
+        if (username or first_name) and str(user_id).isdigit():
             try:
-                user = create_user(user_id, username, first_name)
+                actual_user_id = int(user_id)
+                user = create_user(actual_user_id, username, first_name)
             except Exception as e:
                 print(f"Error auto-registering user {user_id}: {e}")
         
         if not user:
             return jsonify({"error": "User not found"}), 404
+    
+    joined_channel = is_user_member_of_channel(actual_user_id)
     
     # Calculate active user count (online socket connections + some fake activity if needed)
     active_count = get_active_users_count()
@@ -187,19 +200,19 @@ def get_user_api(user_id):
     now = datetime.now(IST)
     start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     completed_today = tasks_col.count_documents({
-        "user_id": int(user_id),
+        "user_id": actual_user_id,
         "status": "completed",
         "completed_at": {"$gte": start_of_today}
     })
         
     from database import transactions_col
     pending_deposits = transactions_col.count_documents({
-        "user_id": int(user_id),
+        "user_id": actual_user_id,
         "type": "deposit",
         "status": "pending"
     })
     pending_redeems = transactions_col.count_documents({
-        "user_id": int(user_id),
+        "user_id": actual_user_id,
         "type": "redeem",
         "status": "pending"
     })
@@ -210,7 +223,7 @@ def get_user_api(user_id):
         for ev in free_fire_events_col.find():
             slots = ev.get("slots", {})
             for slot_key, slot_val in slots.items():
-                if slot_val and slot_val.get("user_id") == int(user_id):
+                if slot_val and slot_val.get("user_id") == actual_user_id:
                     if ev.get("room_id") and ev.get("room_password"):
                         active_ff_room = {
                             "mode": ev["mode"],
@@ -223,10 +236,10 @@ def get_user_api(user_id):
                     break
     except Exception as ex:
         print(f"Error checking active FF rooms: {ex}")
-
+ 
     from matchmaking import matchmaker
     paid_playing = matchmaker.get_paid_playing_count()
-    match_id = matchmaker.user_to_match.get(int(user_id))
+    match_id = matchmaker.user_to_match.get(actual_user_id)
     active_match = None
     if match_id:
         m = matchmaker.get_match(match_id)
@@ -236,6 +249,7 @@ def get_user_api(user_id):
     return jsonify({
         "user": {
             "user_id": user.get("_id"),
+            "unique_id": user.get("unique_id", ""),
             "username": user.get("username", ""),
             "first_name": user.get("first_name", ""),
             "balance": round(user.get("balance", 0.0), 2),
@@ -502,8 +516,17 @@ def handle_connect():
     # Pass user_id via query parameters: socket.connect({query: "userId=123"})
     user_id = request.args.get("userId")
     if user_id:
-        try:
-            uid = int(user_id)
+        from database import users_col
+        # Try resolving unique_id first, then fallback to Telegram User ID
+        user = users_col.find_one({"unique_id": str(user_id).strip()})
+        if user:
+            uid = user["_id"]
+        else:
+            try:
+                uid = int(user_id)
+            except ValueError:
+                uid = None
+        if uid:
             connected_users[uid] = request.sid
             
             # Cancel offline timer if user was in an active match and disconnected
@@ -1237,6 +1260,15 @@ def run_bot():
     
     # Call start() directly. Pyrogram runs the coroutine internally on the set event loop.
     bot_client.start()
+    
+    try:
+        from pyrogram.types import BotCommand
+        bot_client.set_bot_commands([
+            BotCommand("start", "Start the Battle Play bot and open Main Menu"),
+            BotCommand("help", "Get help and guidelines")
+        ])
+    except Exception as e:
+        print(f"Error setting bot commands menu: {e}")
     
     try:
         bot_loop.run_forever()

@@ -42,7 +42,8 @@ def get_start_keyboard(user_id, is_admin=False):
             InlineKeyboardButton("➕ Add Coin", callback_data="btn_add_coin"),
             InlineKeyboardButton("➖ Redeem Coin", callback_data="btn_redeem_coin")
         ],
-        [InlineKeyboardButton("💰 Daily Task (Earn Free)", callback_data="btn_task")]
+        [InlineKeyboardButton("💰 Daily Task (Earn Free)", callback_data="btn_task")],
+        [InlineKeyboardButton("📢 Join Telegram", callback_data="btn_join_tg")]
     ]
     
     if is_admin:

@@ -27,13 +27,26 @@ feedbacks_col = db["feedbacks"]
 car_event_cycles_col = db["car_event_cycles"]
 free_fire_events_col = db["free_fire_events"]
 cricket_event_cycles_col = db["cricket_event_cycles"]
+import string
+import random
+
+def generate_unique_id():
+    chars = string.ascii_uppercase + string.digits
+    while True:
+        uid = "BP" + "".join(random.choices(chars, k=6))
+        # Ensure it's not already in use
+        if not db["users"].find_one({"unique_id": uid}):
+            return uid
 
 def get_user(user_id):
     """Retrieve user details by Telegram user_id."""
     user = users_col.find_one({"_id": int(user_id)})
     if user:
-        # Guarantee balance fields exist for legacy compatibility
+        # Guarantee balance and unique_id fields exist for legacy compatibility
         changed = False
+        if "unique_id" not in user:
+            user["unique_id"] = generate_unique_id()
+            changed = True
         if "deposit_balance" not in user:
             user["deposit_balance"] = round(user.get("balance", 0.0) - user.get("winning_balance", 0.0), 2)
             changed = True
@@ -44,6 +57,7 @@ def get_user(user_id):
             users_col.update_one(
                 {"_id": int(user_id)},
                 {"$set": {
+                    "unique_id": user["unique_id"],
                     "deposit_balance": round(max(0.0, user["deposit_balance"]), 2),
                     "winning_balance": round(max(0.0, user["winning_balance"]), 2)
                 }}
@@ -68,6 +82,7 @@ def create_user(user_id, username, first_name, referred_by=None):
 
     user_doc = {
         "_id": user_id,
+        "unique_id": generate_unique_id(),
         "username": username or f"User_{user_id}",
         "first_name": first_name or "",
         "balance": 0.0,

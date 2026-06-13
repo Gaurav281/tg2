@@ -209,12 +209,42 @@ async def start_handler(client: Client, message: Message):
     welcome_text = (
         f"👋 **Welcome to Battle Play, {first_name}!**\n\n"
         f"Play games right inside Telegram and earn real money!\n\n"
-        f"🆔 **Your User ID:** `{user_id}`\n"
+        f"🆔 **Your Login ID:** `{user.get('unique_id', '')}`\n"
         f"💰 **Wallet Balance:** Rs {balance:.2f}\n\n"
         f"Select an option below to get started:"
     )
     
     await clean_send(client, user_id, welcome_text, reply_markup=get_start_keyboard(user_id, is_admin))
+
+@bot.on_message(filters.command("help") & filters.private)
+async def help_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    await clean_user_history(client, user_id, message.id)
+    help_text = (
+        "❓ **Battle Play Bot Help**\n\n"
+        "Here are the available commands:\n"
+        "🔹 /start - Launch the bot and view main menu\n"
+        "🔹 /help - View help guidelines\n\n"
+        "You can play games and earn cash rewards directly in our Web App."
+    )
+    await clean_send(client, user_id, help_text, reply_markup=get_start_keyboard(user_id, user_id == Config.ADMIN_ID))
+
+@bot.on_callback_query(filters.regex("btn_join_tg"))
+async def btn_join_tg_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    text = (
+        "📢 **Official Telegram Channels & Groups**\n\n"
+        "Join our official spaces to stay updated and get support:\n\n"
+        "🟢 **Official Bot:** [Battle Play Bot](https://t.me/battleplay_bot)\n"
+        "🔵 **Official Channel:** @free_fire_play_earn\n\n"
+        "Click the buttons below to open and join:"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Official Channel", url="https://t.me/free_fire_play_earn")],
+        [InlineKeyboardButton("🤖 Battle Play Bot", url="https://t.me/battleplay_bot")],
+        [InlineKeyboardButton("↩️ Back to Menu", callback_data="main_menu")]
+    ])
+    await query.edit_message_text(text, reply_markup=keyboard, disable_web_page_preview=True)
 
 # --- REJOIN & FORFEIT HANDLERS ---
 @bot.on_callback_query(filters.regex("forfeit_match"))
