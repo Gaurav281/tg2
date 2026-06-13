@@ -52,6 +52,19 @@ app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "hand_cricket_secret_key_1357
 CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
+@app.after_request
+def add_security_and_caching_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    # Enable Strict-Transport-Security (HSTS) only if running over HTTPS in production
+    if request.is_secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https":
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    
+    # Prevent caching of dynamic REST APIs only, keeping static files cached by the browser
+    if request.path.startswith("/api/"):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    return response
+
 # Track connected users: user_id (int) -> socket_id (str)
 connected_users = {}
 # Track active matchmaking timers: user_id -> Timer

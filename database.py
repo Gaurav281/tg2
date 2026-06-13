@@ -27,6 +27,29 @@ feedbacks_col = db["feedbacks"]
 car_event_cycles_col = db["car_event_cycles"]
 free_fire_events_col = db["free_fire_events"]
 cricket_event_cycles_col = db["cricket_event_cycles"]
+
+# Programmatic Indexing for Safe Production Performance
+try:
+    users_col.create_index("unique_id", unique=True, sparse=True)
+except Exception as e:
+    print(f"Index unique_id warning: {e}")
+    users_col.create_index("unique_id")
+
+try:
+    users_col.create_index("invite_code", unique=True, sparse=True)
+except Exception as e:
+    print(f"Index invite_code warning: {e}")
+    users_col.create_index("invite_code")
+
+users_col.create_index("referred_by")
+transactions_col.create_index([("user_id", 1), ("type", 1), ("status", 1)])
+transactions_col.create_index("type")
+transactions_col.create_index("status")
+matches_col.create_index([("player_a.user_id", 1), ("status", 1)])
+matches_col.create_index([("player_b.user_id", 1), ("status", 1)])
+matches_col.create_index("created_at")
+tasks_col.create_index([("user_id", 1), ("status", 1)])
+tasks_col.create_index("completed_at")
 import string
 import random
 
@@ -35,7 +58,7 @@ def generate_unique_id():
     while True:
         uid = "BP" + "".join(random.choices(chars, k=6))
         # Ensure it's not already in use
-        if not db["users"].find_one({"unique_id": uid}):
+        if not db["users"].find_one({"unique_id": uid}, {"_id": 1}):
             return uid
 
 def generate_invite_code():
@@ -43,7 +66,7 @@ def generate_invite_code():
     while True:
         icode = "INV" + "".join(random.choices(chars, k=6))
         # Ensure it's not already in use
-        if not db["users"].find_one({"invite_code": icode}):
+        if not db["users"].find_one({"invite_code": icode}, {"_id": 1}):
             return icode
 
 def get_valid_referrals_count(user_id):
@@ -522,7 +545,7 @@ def get_leaderboard():
     for r in rankings:
         uid = r["_id"]
         real_wins_map[uid] = r["wins"]
-        user = get_user(uid)
+        user = users_col.find_one({"_id": uid}, {"username": 1, "first_name": 1, "is_banned": 1})
         if user and not user.get("is_banned", False):
             real_list.append({
                 "user_id": uid,
@@ -532,7 +555,7 @@ def get_leaderboard():
             })
             
     # Include all other registered active users with 0 wins
-    all_users = list(users_col.find({"is_banned": False}))
+    all_users = list(users_col.find({"is_banned": False}, {"_id": 1, "username": 1, "first_name": 1}))
     for u in all_users:
         if u["_id"] not in real_wins_map:
             real_list.append({
@@ -656,7 +679,7 @@ def check_played_paid_match_today(user_id):
             {"player_a.user_id": user_id},
             {"player_b.user_id": user_id}
         ]
-    })
+    }, {"_id": 1})
     if paid_match:
         return True
         
@@ -669,7 +692,7 @@ def check_played_paid_match_today(user_id):
                 "joined_at": {"$gte": start_of_today, "$lt": end_of_today}
             }
         }
-    })
+    }, {"_id": 1})
     if paid_car:
         return True
         
@@ -679,7 +702,7 @@ def check_played_paid_match_today(user_id):
         "type": "free_fire_fee",
         "amount": {"$lt": 0},
         "created_at": {"$gte": start_of_today, "$lt": end_of_today}
-    })
+    }, {"_id": 1})
     if paid_ff:
         return True
         
@@ -861,8 +884,14 @@ def get_finance_stats():
         "net_profit": round(net_profit, 2)
     }
 
+_start_buttons_cache = None
+
 def get_start_button_states():
     """Retrieve the enable/disable state of all main menu user buttons."""
+    global _start_buttons_cache
+    if _start_buttons_cache is not None:
+        return _start_buttons_cache.copy()
+        
     doc = db["system_config"].find_one({"_id": "start_buttons"})
     default_states = {
         "play_match": True,
@@ -874,16 +903,22 @@ def get_start_button_states():
         "join_tg": True
     }
     if not doc:
+        _start_buttons_cache = default_states.copy()
         return default_states
     
     # Merge with default states to ensure all keys exist
     for k, v in default_states.items():
         if k not in doc:
             doc[k] = v
+    
+    # Remove _id key to prevent mutation issues and allow copying
+    doc.pop("_id", None)
+    _start_buttons_cache = doc.copy()
     return doc
 
 def toggle_start_button_state(button_key):
     """Toggle the enable/disable state of a start button."""
+    global _start_buttons_cache
     states = get_start_button_states()
     current_val = states.get(button_key, True)
     new_val = not current_val
@@ -893,6 +928,7 @@ def toggle_start_button_state(button_key):
         {"$set": {button_key: new_val}},
         upsert=True
     )
+    _start_buttons_cache = None
     return new_val
 
 def get_pending_deposits():
