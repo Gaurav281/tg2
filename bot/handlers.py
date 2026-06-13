@@ -479,6 +479,7 @@ async def btn_invite_callback(client: Client, query: CallbackQuery):
     
     referral_link = f"https://t.me/{bot_uname}?start=invite_{user_id}"
     ref_count = user.get("referrals_count", 0) if user else 0
+    invite_code = user.get("invite_code", "N/A") if user else "N/A"
     
     text = (
         f"✉️ **Invite Friends & Earn!**\n\n"
@@ -488,7 +489,8 @@ async def btn_invite_callback(client: Client, query: CallbackQuery):
         f"• Invite 10 Friends: **Rs 5.00**\n\n"
         f"📊 **Your Referral Stats:**\n"
         f"Total Referrals: **{ref_count}**\n\n"
-        f"🔗 **Your Invite Link:**\n`{referral_link}`"
+        f"🔗 **Your Invite Link:**\n`{referral_link}`\n\n"
+        f"🔑 **Your Invite Code:**\n`{invite_code}`"
     )
     share_url = f"https://t.me/share/url?url={urllib.parse.quote(referral_link)}&text={urllib.parse.quote('Join Battle Play and play games! 🎮')}"
     keyboard = InlineKeyboardMarkup([
@@ -878,13 +880,49 @@ async def admin_stats_callback(client: Client, query: CallbackQuery):
         f"🔗 Tasks Completed: **{stats['completed_tasks']}**\n"
         f"💰 Estimated Ad Earnings ($10 CPM): **Rs {stats['estimated_ad_revenue']:.2f}**\n"
         f"🎁 Task Rewards Paid: **Rs {stats['total_task_rewards_paid']:.2f}**\n\n"
-        f"🏏 Total Match Fees Collected: **Rs {stats['match_fees_collected']:.2f}**\n"
-        f"🏆 Total Match Wins Paid: **Rs {stats['match_wins_paid']:.2f}**\n\n"
+        f"🎮 Total Entry Fees Collected (All Games): **Rs {stats['match_fees_collected']:.2f}**\n"
+        f"🏆 Total Game Wins Paid (All Games): **Rs {stats['match_wins_paid']:.2f}**\n\n"
         f"🎗️ Total Free Giveaways (Referrals, Streaks, Signup): **Rs {stats['total_giveaways']:.2f}**\n"
         f"🏦 Total Wallet Liabilities (Current Balance): **Rs {stats['total_user_wallets']:.2f}**\n\n"
         f"📈 **Net Platform Profit/Loss:** **Rs {stats['net_profit']:.2f}**"
     )
     await query.edit_message_text(text, reply_markup=get_admin_keyboard())
+
+@bot.on_callback_query(filters.regex("admin_manage_buttons"))
+async def admin_manage_buttons_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        return
+        
+    from database import get_start_button_states
+    from bot.keyboards import get_admin_manage_buttons_keyboard
+    
+    states = get_start_button_states()
+    await query.edit_message_text(
+        "🔑 **Manage User Start Buttons**\n\n"
+        "Click any button below to enable or disable it on the user menu screen.",
+        reply_markup=get_admin_manage_buttons_keyboard(states)
+    )
+
+@bot.on_callback_query(filters.regex(r"^adm_toggle_btn_(.+)"))
+async def admin_toggle_btn_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        return
+        
+    btn_key = query.matches[0].group(1)
+    
+    from database import toggle_start_button_state, get_start_button_states
+    from bot.keyboards import get_admin_manage_buttons_keyboard
+    
+    toggle_start_button_state(btn_key)
+    states = get_start_button_states()
+    
+    await query.edit_message_text(
+        "🔑 **Manage User Start Buttons**\n\n"
+        "Click any button below to enable or disable it on the user menu screen.",
+        reply_markup=get_admin_manage_buttons_keyboard(states)
+    )
 
 @bot.on_callback_query(filters.regex("admin_pending_dep"))
 async def admin_pending_dep_callback(client: Client, query: CallbackQuery):
@@ -1382,9 +1420,9 @@ async def admin_ff_create_callback(client: Client, query: CallbackQuery):
     instruction = (
         "➕ **Create Free Fire Event**\n\n"
         "Please send the event details in the exact format shown below:\n\n"
-        "`Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time | Date`\n\n"
+        "`Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time | Date | Booyah Prize`\n\n"
         "**Example:**\n"
-        "`BR | Bermuda | 5 | 4 | 50 | 7:00 PM | 8:00 PM | 2026-06-12`"
+        "`BR | Bermuda | 5 | 4 | 50 | 7:00 PM | 8:00 PM | 2026-06-12 | 100`"
     )
     await query.edit_message_text(
         instruction, 
@@ -1412,9 +1450,9 @@ async def admin_ff_edit_callback(client: Client, query: CallbackQuery):
         "📝 **Edit Free Fire Event**\n\n"
         f"{current_details}"
         "Please send the new event details in the exact format shown below:\n\n"
-        "`Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time | Date`\n\n"
+        "`Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time | Date | Booyah Prize`\n\n"
         "**Example:**\n"
-        "`BR | Bermuda | 5 | 4 | 50 | 7:00 PM | 8:00 PM | 2026-06-12`"
+        "`BR | Bermuda | 5 | 4 | 50 | 7:00 PM | 8:00 PM | 2026-06-12 | 100`"
     )
     await query.edit_message_text(
         instruction, 

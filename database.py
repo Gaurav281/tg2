@@ -799,21 +799,13 @@ def get_finance_stats():
     redeems = list(transactions_col.aggregate(red_pipeline))
     total_redeems = abs(redeems[0]["total"]) if redeems else 0.0
     
-    # 3. Total Match Fees (Paid) and Match Wins
-    # Platform earns on paid match fees: 5.0 fee. Winner gets 8.5.
-    # Total match fees collected = count of matches * 2 (or 1 if against bot)
-    # Total match wins distributed = count of matches * 8.5 (if won by user)
-    # If a match is against the bot:
-    #   Fee: 5.0 collected.
-    #   If user wins, user gets 8.5 (loss of 3.5 for platform).
-    #   If bot wins, user gets 0 (profit of 5.0 for platform).
-    # Let's count actual match fee / win transactions!
+    # 3. Total Game Fees Collected (All Games)
     fee_pipe = [
-        {"$match": {"type": "match_fee", "status": "completed"}},
+        {"$match": {"type": {"$in": ["match_fee", "car_event_fee", "free_fire_fee"]}, "status": "completed"}},
         {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
     ]
     win_pipe = [
-        {"$match": {"type": "match_win", "status": "completed"}},
+        {"$match": {"type": {"$in": ["match_win", "car_event_win", "car_game_free_win", "free_fire_win", "free_fire_free_win"]}, "status": "completed"}},
         {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
     ]
     fees = list(transactions_col.aggregate(fee_pipe))
@@ -879,6 +871,40 @@ def get_finance_stats():
         "total_user_wallets": round(total_user_balance, 2),
         "net_profit": round(net_profit, 2)
     }
+
+def get_start_button_states():
+    """Retrieve the enable/disable state of all main menu user buttons."""
+    doc = db["system_config"].find_one({"_id": "start_buttons"})
+    default_states = {
+        "play_match": True,
+        "challenge": True,
+        "invite": True,
+        "add_coin": True,
+        "redeem_coin": True,
+        "task": True,
+        "join_tg": True
+    }
+    if not doc:
+        return default_states
+    
+    # Merge with default states to ensure all keys exist
+    for k, v in default_states.items():
+        if k not in doc:
+            doc[k] = v
+    return doc
+
+def toggle_start_button_state(button_key):
+    """Toggle the enable/disable state of a start button."""
+    states = get_start_button_states()
+    current_val = states.get(button_key, True)
+    new_val = not current_val
+    
+    db["system_config"].update_one(
+        {"_id": "start_buttons"},
+        {"$set": {button_key: new_val}},
+        upsert=True
+    )
+    return new_val
 
 def get_pending_deposits():
     return list(transactions_col.find({"type": "deposit", "status": "pending"}).sort("created_at", -1))

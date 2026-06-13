@@ -29,26 +29,67 @@ def get_secure_web_url(user_id):
     return f"{base_url}?userId={user_id}"
 
 def get_start_keyboard(user_id, is_admin=False):
-    """Generate the main menu keyboard."""
+    """Generate the main menu keyboard based on admin-configured enabled states."""
+    from database import get_start_button_states
+    states = get_start_button_states()
     web_url = get_secure_web_url(user_id)
     
-    keyboard = [
-        [InlineKeyboardButton("🏏 Play Match (Paid)", web_app=WebAppInfo(url=web_url))],
-        [
-            InlineKeyboardButton("👥 Challenge Friend", callback_data="btn_challenge"),
-            InlineKeyboardButton("✉️ Invite Friend", callback_data="btn_invite")
-        ],
-        [
-            InlineKeyboardButton("➕ Add Coin", callback_data="btn_add_coin"),
-            InlineKeyboardButton("➖ Redeem Coin", callback_data="btn_redeem_coin")
-        ],
-        [InlineKeyboardButton("💰 Daily Task (Earn Free)", callback_data="btn_task")],
-        [InlineKeyboardButton("📢 Join Telegram", callback_data="btn_join_tg")]
-    ]
+    keyboard = []
     
+    # Play Match
+    if states.get("play_match", True):
+        keyboard.append([InlineKeyboardButton("🏏 Play Match (Paid)", web_app=WebAppInfo(url=web_url))])
+        
+    # Challenge & Invite
+    row2 = []
+    if states.get("challenge", True):
+        row2.append(InlineKeyboardButton("👥 Challenge Friend", callback_data="btn_challenge"))
+    if states.get("invite", True):
+        row2.append(InlineKeyboardButton("✉️ Invite Friend", callback_data="btn_invite"))
+    if row2:
+        keyboard.append(row2)
+        
+    # Add & Redeem
+    row3 = []
+    if states.get("add_coin", True):
+        row3.append(InlineKeyboardButton("➕ Add Coin", callback_data="btn_add_coin"))
+    if states.get("redeem_coin", True):
+        row3.append(InlineKeyboardButton("➖ Redeem Coin", callback_data="btn_redeem_coin"))
+    if row3:
+        keyboard.append(row3)
+        
+    # Daily Task
+    if states.get("task", True):
+        keyboard.append([InlineKeyboardButton("💰 Daily Task (Earn Free)", callback_data="btn_task")])
+        
+    # Join TG
+    if states.get("join_tg", True):
+        keyboard.append([InlineKeyboardButton("📢 Join Telegram", callback_data="btn_join_tg")])
+        
     if is_admin:
         keyboard.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel")])
         
+    return InlineKeyboardMarkup(keyboard)
+
+def get_admin_manage_buttons_keyboard(button_states):
+    keyboard = []
+    button_labels = {
+        "play_match": "🏏 Play Match",
+        "challenge": "👥 Challenge Friend",
+        "invite": "✉️ Invite Friend",
+        "add_coin": "➕ Add Coin",
+        "redeem_coin": "➖ Redeem Coin",
+        "task": "💰 Daily Task",
+        "join_tg": "📢 Join Telegram"
+    }
+    
+    for key, label in button_labels.items():
+        state_icon = "✅ Enabled" if button_states.get(key, True) else "❌ Disabled"
+        keyboard.append([
+            InlineKeyboardButton(f"{label}: {state_icon}", callback_data=f"adm_toggle_btn_{key}")
+        ])
+        
+    keyboard.append([InlineKeyboardButton("↩️ Back to Admin Panel", callback_data="admin_panel")])
     return InlineKeyboardMarkup(keyboard)
 
 def get_add_coin_keyboard():
@@ -94,6 +135,7 @@ def get_admin_keyboard():
             InlineKeyboardButton("📤 Pending Redeems", callback_data="admin_pending_red")
         ],
         [InlineKeyboardButton("🏆 Free Fire Events", callback_data="admin_ff_events")],
+        [InlineKeyboardButton("🔑 Manage Start Buttons", callback_data="admin_manage_buttons")],
         [InlineKeyboardButton("📣 Broadcast Message", callback_data="admin_broadcast")],
         [InlineKeyboardButton("↩️ Back to Main Menu", callback_data="main_menu")]
     ])
