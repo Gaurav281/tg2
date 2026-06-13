@@ -486,11 +486,11 @@ async def btn_invite_callback(client: Client, query: CallbackQuery):
     
     text = (
         f"✉️ **Invite Friends & Earn!**\n\n"
-        f"Invite your friends to play and claim Rs 1.00 per invite when the invited user deposits a minimum of Rs 10.00.\n"
+        f"Invite your friends to play and claim Rs 1.00 reward directly on each successful invite.\n"
         f"You can claim your rewards in the Web App Rewards Tab.\n\n"
         f"📊 **Your Referral Stats:**\n"
         f"• Total Invites: **{total_invites}**\n"
-        f"• Valid Referrals (Min Rs 10 Deposit): **{valid_invites}**\n\n"
+        f"• Successful Invites: **{valid_invites}**\n\n"
         f"🔗 **Your Invite Link:**\n`{referral_link}`\n\n"
         f"🔑 **Your Invite Code:**\n`{invite_code}`"
     )

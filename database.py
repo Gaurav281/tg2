@@ -70,19 +70,9 @@ def generate_invite_code():
             return icode
 
 def get_valid_referrals_count(user_id):
-    """Counts how many referred users have deposited at least Rs 10 in their wallet."""
+    """Counts how many users have been referred by this user."""
     user_id = int(user_id)
-    referred_users = list(users_col.find({"referred_by": user_id}, {"_id": 1}))
-    if not referred_users:
-        return 0
-    referred_ids = [u["_id"] for u in referred_users]
-    valid_count = transactions_col.count_documents({
-        "user_id": {"$in": referred_ids},
-        "type": "deposit",
-        "status": "approved",
-        "amount": {"$gte": 10.0}
-    })
-    return valid_count
+    return users_col.count_documents({"referred_by": user_id})
 
 def get_user(user_id):
     """Retrieve user details by Telegram user_id."""
@@ -779,7 +769,7 @@ def claim_referral_reward(user_id, tier=None):
     
     new_referrals = valid_count - claimed_count
     if new_referrals <= 0:
-        return False, "No new referral rewards to claim. Invite more friends and make sure they deposit min Rs 10."
+        return False, "No new referral rewards to claim. Invite more friends to claim rewards."
         
     reward_amt = round(new_referrals * 1.00, 2)
     
