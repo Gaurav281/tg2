@@ -787,17 +787,24 @@ def get_active_car_event_cycles(user_id):
     """Retrieves current active Car Game event cycles and formats for the user."""
     cycles = list(car_event_cycles_col.find({"status": "active"}))
     
-    # Calculate free event daily play count
-    start_of_today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
-    free_today_count = car_event_cycles_col.count_documents({
+    # Calculate total free event play count (lifetime)
+    free_joined_count = car_event_cycles_col.count_documents({
         "event_id": 1,
         "participants": {
             "$elemMatch": {
-                "user_id": int(user_id),
-                "joined_at": {"$gte": start_of_today}
+                "user_id": int(user_id)
             }
         }
     })
+    
+    # Check if user has deposited min Rs 10
+    has_deposit_10 = transactions_col.find_one({
+        "user_id": int(user_id),
+        "type": "deposit",
+        "status": "approved",
+        "amount": {"$gte": 10.0}
+    }) is not None
+    free_limit = 5 if has_deposit_10 else 3
     
     formatted = []
     for cyc in cycles:
@@ -827,7 +834,8 @@ def get_active_car_event_cycles(user_id):
             "user_played": user_played,
             "user_score": user_score,
             "status": cyc["status"],
-            "free_today_count": free_today_count
+            "free_joined_count": free_joined_count,
+            "free_limit": free_limit
         })
     return formatted
 
@@ -854,20 +862,29 @@ def join_car_event(user_id, event_id):
         else:
             return False, "You have already completed your game for this event cycle. Please wait for the next cycle to start."
             
-    # Check daily limit for free event (Event 1)
+    # Check total limit for free event (Event 1)
     if int(event_id) == 1:
-        start_of_today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
-        played_today_count = car_event_cycles_col.count_documents({
+        free_joined_count = car_event_cycles_col.count_documents({
             "event_id": 1,
             "participants": {
                 "$elemMatch": {
-                    "user_id": user_id,
-                    "joined_at": {"$gte": start_of_today}
+                    "user_id": user_id
                 }
             }
         })
-        if played_today_count >= 5:
-            return False, "You can only play 5 free entry car events in a day."
+        # Check if user has deposited min Rs 10
+        has_deposit_10 = transactions_col.find_one({
+            "user_id": user_id,
+            "type": "deposit",
+            "status": "approved",
+            "amount": {"$gte": 10.0}
+        }) is not None
+        free_limit = 5 if has_deposit_10 else 3
+        if free_joined_count >= free_limit:
+            if free_limit == 3:
+                return False, "You have reached your limit of 3 free games. Deposit min Rs 10 to get 2 more chances!"
+            else:
+                return False, "You have reached your maximum limit of 5 free games."
         
     # Deduct entry fee
     fee = cyc["entry_fee"]
@@ -1028,8 +1045,8 @@ def get_active_cricket_cycle(user_id):
         cyc = {
             "event_id": 1,
             "entry_fee": 1.0,
-            "max_participants": 3,
-            "prizes": {"1": 2.5},
+            "max_participants": 2,
+            "prizes": {"1": 1.8},
             "status": "active",
             "participants": [],
             "created_at": datetime.now(IST)
@@ -1219,8 +1236,8 @@ def resolve_cricket_event_cycle(cycle_id):
     cricket_event_cycles_col.insert_one({
         "event_id": 1,
         "entry_fee": 1.0,
-        "max_participants": 3,
-        "prizes": prizes,
+        "max_participants": 2,
+        "prizes": {"1": 1.8},
         "status": "active",
         "participants": [],
         "created_at": datetime.now(IST)
@@ -1436,12 +1453,17 @@ def seed_default_events():
         
     # Seed Cricket Cycle
     cc1 = cricket_event_cycles_col.find_one({"status": "active"})
+    if cc1 and (cc1.get("max_participants") != 2 or cc1.get("prizes", {}).get("1") != 1.8):
+        print("Updating active cricket cycle parameters...")
+        cricket_event_cycles_col.delete_many({"status": "active"})
+        cc1 = None
+        
     if not cc1:
         cricket_event_cycles_col.insert_one({
             "event_id": 1,
             "entry_fee": 1.0,
-            "max_participants": 3,
-            "prizes": {"1": 2.5},
+            "max_participants": 2,
+            "prizes": {"1": 1.8},
             "status": "active",
             "participants": [],
             "created_at": datetime.now(IST)
