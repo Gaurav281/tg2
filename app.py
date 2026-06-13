@@ -246,10 +246,12 @@ def get_user_api(user_id):
         if m and m.status not in ["completed", "cancelled"]:
             active_match = m.to_dict()
         
+    from database import get_valid_referrals_count
     return jsonify({
         "user": {
             "user_id": user.get("_id"),
             "unique_id": user.get("unique_id", ""),
+            "invite_code": user.get("invite_code", ""),
             "username": user.get("username", ""),
             "first_name": user.get("first_name", ""),
             "balance": round(user.get("balance", 0.0), 2),
@@ -257,7 +259,7 @@ def get_user_api(user_id):
             "winning_balance": round(user.get("winning_balance", 0.0), 2),
             "streak": user.get("streak", 0),
             "last_streak_claim": user.get("last_streak_claim").isoformat() if user.get("last_streak_claim") else None,
-            "referrals_count": user.get("referrals_count", 0),
+            "referrals_count": get_valid_referrals_count(actual_user_id),
             "referred_by": user.get("referred_by"),
             "referral_claimed": user.get("referral_claimed", []),
             "daily_missions": user.get("daily_missions", {}),

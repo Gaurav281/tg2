@@ -592,11 +592,11 @@ async def user_text_handler(client: Client, message: Message):
         elif state["action"] == "wait_ff_create":
             admin_states.pop(user_id, None)
             parts = [p.strip() for p in text.split("|")]
-            if len(parts) != 8:
+            if len(parts) < 8 or len(parts) > 9:
                 await clean_send(
                     client,
                     user_id,
-                    "❌ Invalid format. Please write exactly in the `Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time | Date` format.",
+                    "❌ Invalid format. Please write in the format:\n`Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time | Date [| Booyah Prize]`",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_ff_events")]])
                 )
                 return
@@ -609,6 +609,7 @@ async def user_text_handler(client: Client, message: Message):
                 start_time = parts[5]
                 end_time = parts[6]
                 date_val = parts[7]
+                booyah_prize = float(parts[8]) if len(parts) == 9 else 0.0
                 
                 from database import free_fire_events_col, IST
                 free_fire_events_col.insert_one({
@@ -616,6 +617,7 @@ async def user_text_handler(client: Client, message: Message):
                     "map": map_name,
                     "entry_fee": entry_fee,
                     "prize_per_kill": prize_per_kill,
+                    "booyah_prize": booyah_prize,
                     "max_participants": max_participants,
                     "start_time": start_time,
                     "end_time": end_time,
@@ -635,11 +637,11 @@ async def user_text_handler(client: Client, message: Message):
             event_id = state["event_id"]
             admin_states.pop(user_id, None)
             parts = [p.strip() for p in text.split("|")]
-            if len(parts) != 8:
+            if len(parts) < 8 or len(parts) > 9:
                 await clean_send(
                     client,
                     user_id,
-                    "❌ Invalid format. Please write exactly in the `Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time | Date` format.",
+                    "❌ Invalid format. Please write in the format:\n`Mode | Map | Entry Fee | Prize Per Kill | Total Participants | Start Time | End Time | Date [| Booyah Prize]`",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_ff_events")]])
                 )
                 return
@@ -652,6 +654,7 @@ async def user_text_handler(client: Client, message: Message):
                 start_time = parts[5]
                 end_time = parts[6]
                 date_val = parts[7]
+                booyah_prize = float(parts[8]) if len(parts) == 9 else 0.0
                 
                 from database import free_fire_events_col
                 from bson.objectid import ObjectId
@@ -671,6 +674,7 @@ async def user_text_handler(client: Client, message: Message):
                         "map": map_name,
                         "entry_fee": entry_fee,
                         "prize_per_kill": prize_per_kill,
+                        "booyah_prize": booyah_prize,
                         "max_participants": max_participants,
                         "start_time": start_time,
                         "end_time": end_time,
@@ -721,17 +725,23 @@ async def user_text_handler(client: Client, message: Message):
             try:
                 normalized_text = text.replace("\n", ",")
                 kills_data = {}
+                booyah_slot = None
                 pairs = [p.strip() for p in normalized_text.split(",") if p.strip()]
                 for pair in pairs:
+                    if ":" not in pair:
+                        continue
                     sub_parts = pair.split(":")
                     if len(sub_parts) != 2:
                         continue
-                    slot_num = sub_parts[0].strip()
-                    kills_val = int(sub_parts[1].strip())
-                    kills_data[slot_num] = kills_val
+                    key = sub_parts[0].strip().lower()
+                    val_str = sub_parts[1].strip()
+                    if key in ["booyah", "b"]:
+                        booyah_slot = val_str
+                    else:
+                        kills_data[key] = int(val_str)
                 
                 from database import declare_free_fire_results
-                success, msg = declare_free_fire_results(event_id, kills_data)
+                success, msg = declare_free_fire_results(event_id, kills_data, booyah_slot)
                 if success:
                     await clean_send(client, user_id, f"✅ {msg}", reply_markup=get_admin_keyboard())
                 else:
@@ -1483,9 +1493,10 @@ async def admin_ff_result_callback(client: Client, query: CallbackQuery):
         )
     instruction += (
         "Please send the player kills in this exact format:\n\n"
-        "`Slot_Number:Kills` (separated by commas or newlines)\n\n"
+        "`Slot_Number:Kills` (separated by commas or newlines)\n"
+        "To declare a **Booyah** winner, add `booyah:Slot_Number` or `b:Slot_Number` to the message.\n\n"
         "**Example:**\n"
-        "`1:5, 5:2, 12:0` (means Slot 1 got 5 kills, Slot 5 got 2, etc.)"
+        "`1:5, 5:2, 12:0, booyah:5` (Slot 1 got 5 kills, Slot 5 got 2 and won Booyah)"
     )
     await query.edit_message_text(
         instruction, 

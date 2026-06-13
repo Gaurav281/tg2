@@ -38,6 +38,29 @@ def generate_unique_id():
         if not db["users"].find_one({"unique_id": uid}):
             return uid
 
+def generate_invite_code():
+    chars = string.ascii_uppercase + string.digits
+    while True:
+        icode = "INV" + "".join(random.choices(chars, k=6))
+        # Ensure it's not already in use
+        if not db["users"].find_one({"invite_code": icode}):
+            return icode
+
+def get_valid_referrals_count(user_id):
+    """Counts how many referred users have deposited at least Rs 10 in their wallet."""
+    user_id = int(user_id)
+    referred_users = list(users_col.find({"referred_by": user_id}, {"_id": 1}))
+    if not referred_users:
+        return 0
+    referred_ids = [u["_id"] for u in referred_users]
+    valid_count = transactions_col.count_documents({
+        "user_id": {"$in": referred_ids},
+        "type": "deposit",
+        "status": "approved",
+        "amount": {"$gte": 10.0}
+    })
+    return valid_count
+
 def get_user(user_id):
     """Retrieve user details by Telegram user_id."""
     user = users_col.find_one({"_id": int(user_id)})
@@ -46,6 +69,9 @@ def get_user(user_id):
         changed = False
         if "unique_id" not in user:
             user["unique_id"] = generate_unique_id()
+            changed = True
+        if "invite_code" not in user:
+            user["invite_code"] = generate_invite_code()
             changed = True
         if "deposit_balance" not in user:
             user["deposit_balance"] = round(user.get("balance", 0.0) - user.get("winning_balance", 0.0), 2)
@@ -58,6 +84,7 @@ def get_user(user_id):
                 {"_id": int(user_id)},
                 {"$set": {
                     "unique_id": user["unique_id"],
+                    "invite_code": user["invite_code"],
                     "deposit_balance": round(max(0.0, user["deposit_balance"]), 2),
                     "winning_balance": round(max(0.0, user["winning_balance"]), 2)
                 }}
@@ -83,6 +110,7 @@ def create_user(user_id, username, first_name, referred_by=None):
     user_doc = {
         "_id": user_id,
         "unique_id": generate_unique_id(),
+        "invite_code": generate_invite_code(),
         "username": username or f"User_{user_id}",
         "first_name": first_name or "",
         "balance": 0.0,
@@ -131,8 +159,8 @@ def submit_invite_code(user_id, invite_code):
     if user.get("referred_by"):
         return False, "You have already set an inviter."
         
-    # Find inviter
-    inviter = users_col.find_one({"unique_id": str(invite_code).strip().upper()})
+    # Find inviter using the new invite_code field
+    inviter = users_col.find_one({"invite_code": str(invite_code).strip().upper()})
     if not inviter:
         return False, "Invalid invite code"
         
@@ -218,7 +246,7 @@ def update_balance(user_id, amount, tx_type, details=None):
         # Addition (amount > 0)
         # Check transaction type:
         # If it is a deposit or admin manually adding: added to deposit_balance
-        if tx_type in ["deposit", "admin_add", "match_refund", "car_event_refund", "free_fire_refund", "car_game_free_win"]:
+        if tx_type in ["deposit", "admin_add", "match_refund", "car_event_refund", "free_fire_refund", "car_game_free_win", "free_fire_free_win"]:
             new_deposit = round(deposit_bal + amount, 2)
             new_winning = winning_bal
         else:
@@ -427,60 +455,114 @@ def save_match_result(match_id, player_a_data, player_b_data, match_type, winner
                 score = p.get("score", 0)
                 update_daily_mission_progress(uid, matches_played=1, max_score=score)
 
-def get_leaderboard():
-    """Get top 3 users based on win count and current user rank."""
-    # We aggregate matches to count wins
-    pipeline = [
-        {"$match": {"winner_id": {"$exists": True, "$ne": "bot", "$type": "long"}}}, # exclude draws or bot wins
-        {"$group": {"_id": "$winner_id", "wins": {"$sum": 1}}},
-        {"$sort": {"wins": -1}},
-        {"$limit": 100}
-    ]
-    rankings = list(matches_col.aggregate(pipeline))
-    
-    # Match rankings with usernames
-    leaderboard = []
-    user_wins_map = {}
-    for idx, r in enumerate(rankings):
-        uid = r["_id"]
-        user_wins_map[uid] = r["wins"]
-        if idx < 3: # get top 3
-            user = get_user(uid)
-            if user:
-                leaderboard.append({
-                    "rank": idx + 1,
-                    "user_id": uid,
-                    "username": user.get("username", "Unknown"),
-                    "first_name": user.get("first_name", ""),
-                    "wins": r["wins"]
-                })
-                
-    # If less than 3, fill with placeholders or other active users
-    if len(leaderboard) < 3:
-        all_users = list(users_col.find({"is_banned": False}).limit(5))
-        for u in all_users:
-            if u["_id"] not in [l["user_id"] for l in leaderboard] and len(leaderboard) < 3:
-                leaderboard.append({
-                    "rank": len(leaderboard) + 1,
-                    "user_id": u["_id"],
-                    "username": u.get("username", "Player"),
-                    "first_name": u.get("first_name", ""),
-                    "wins": user_wins_map.get(u["_id"], 0)
-                })
-                
-    return leaderboard
+DEMO_USERS = [
+    {"username": "Aarav_Sharma", "first_name": "Aarav", "wins": 25, "user_id": -1001},
+    {"username": "Kabir_Singh", "first_name": "Kabir", "wins": 22, "user_id": -1002},
+    {"username": "Vivaan_Mehta", "first_name": "Vivaan", "wins": 20, "user_id": -1003},
+    {"username": "Aditya_Verma", "first_name": "Aditya", "wins": 19, "user_id": -1004},
+    {"username": "Vihaan_Patel", "first_name": "Vihaan", "wins": 18, "user_id": -1005},
+    {"username": "Arjun_Reddy", "first_name": "Arjun", "wins": 17, "user_id": -1006},
+    {"username": "Sai_Kiran", "first_name": "Sai", "wins": 16, "user_id": -1007},
+    {"username": "Reyansh_Gupta", "first_name": "Reyansh", "wins": 15, "user_id": -1008},
+    {"username": "Krishna_Kumar", "first_name": "Krishna", "wins": 15, "user_id": -1009},
+    {"username": "Ishaan_Joshi", "first_name": "Ishaan", "wins": 14, "user_id": -1010},
+    {"username": "Shaurya_Roy", "first_name": "Shaurya", "wins": 14, "user_id": -1011},
+    {"username": "Aryan_Sen", "first_name": "Aryan", "wins": 13, "user_id": -1012},
+    {"username": "Atharv_Rao", "first_name": "Atharv", "wins": 13, "user_id": -1013},
+    {"username": "Dev_Mishra", "first_name": "Dev", "wins": 12, "user_id": -1014},
+    {"username": "Dhruv_Trivedi", "first_name": "Dhruv", "wins": 12, "user_id": -1015},
+    {"username": "Siddharth_Nair", "first_name": "Siddharth", "wins": 11, "user_id": -1016},
+    {"username": "Shivam_Dubey", "first_name": "Shivam", "wins": 11, "user_id": -1017},
+    {"username": "Pranav_Pillai", "first_name": "Pranav", "wins": 10, "user_id": -1018},
+    {"username": "Rishabh_Pant", "first_name": "Rishabh", "wins": 10, "user_id": -1019},
+    {"username": "Yash_Goyal", "first_name": "Yash", "wins": 9, "user_id": -1020},
+    {"username": "Rohan_Das", "first_name": "Rohan", "wins": 9, "user_id": -1021},
+    {"username": "Gaurav_Jha", "first_name": "Gaurav", "wins": 9, "user_id": -1022},
+    {"username": "Rahul_Dravid", "first_name": "Rahul", "wins": 8, "user_id": -1023},
+    {"username": "Amit_Sharma", "first_name": "Amit", "wins": 8, "user_id": -1024},
+    {"username": "Vikrant_Choudhary", "first_name": "Vikrant", "wins": 8, "user_id": -1025},
+    {"username": "Akash_Yadav", "first_name": "Akash", "wins": 7, "user_id": -1026},
+    {"username": "Alok_Pandey", "first_name": "Alok", "wins": 7, "user_id": -1027},
+    {"username": "Deepak_Chahar", "first_name": "Deepak", "wins": 7, "user_id": -1028},
+    {"username": "Sandeep_Lamic", "first_name": "Sandeep", "wins": 6, "user_id": -1029},
+    {"username": "Manoj_Bajpayee", "first_name": "Manoj", "wins": 6, "user_id": -1030},
+    {"username": "Sanjay_Dutt", "first_name": "Sanjay", "wins": 6, "user_id": -1031},
+    {"username": "Rajesh_Hamal", "first_name": "Rajesh", "wins": 5, "user_id": -1032},
+    {"username": "Anil_Kapoor", "first_name": "Anil", "wins": 5, "user_id": -1033},
+    {"username": "Sunil_Grover", "first_name": "Sunil", "wins": 5, "user_id": -1034},
+    {"username": "Suresh_Raina", "first_name": "Suresh", "wins": 4, "user_id": -1035},
+    {"username": "Rakesh_Roshan", "first_name": "Rakesh", "wins": 4, "user_id": -1036},
+    {"username": "Ramesh_Tendulkar", "first_name": "Ramesh", "wins": 4, "user_id": -1037},
+    {"username": "Mahesh_Babu", "first_name": "Mahesh", "wins": 3, "user_id": -1038},
+    {"username": "Dinesh_Karthik", "first_name": "Dinesh", "wins": 3, "user_id": -1039},
+    {"username": "Harish_Kalyan", "first_name": "Harish", "wins": 3, "user_id": -1040},
+    {"username": "Nitish_Rana", "first_name": "Nitish", "wins": 2, "user_id": -1041},
+    {"username": "Manish_Pandey", "first_name": "Manish", "wins": 2, "user_id": -1042},
+    {"username": "Vikas_Khanna", "first_name": "Vikas", "wins": 2, "user_id": -1043},
+    {"username": "Abhay_Deol", "first_name": "Abhay", "wins": 1, "user_id": -1044},
+    {"username": "Vijay_Vijay", "first_name": "Vijay", "wins": 1, "user_id": -1045},
+    {"username": "Ajay_Devgn", "first_name": "Ajay", "wins": 1, "user_id": -1046},
+    {"username": "Pankaj_Tripathi", "first_name": "Pankaj", "wins": 1, "user_id": -1047},
+    {"username": "Rohit_Sharma", "first_name": "Rohit", "wins": 1, "user_id": -1048},
+    {"username": "Hardik_Pandya", "first_name": "Hardik", "wins": 1, "user_id": -1049},
+    {"username": "Jasprit_Bumrah", "first_name": "Jasprit", "wins": 1, "user_id": -1050}
+]
 
-def get_user_rank(user_id):
-    """Determine the specific rank of a user."""
+def get_leaderboard():
+    """Get all users (real and demo) sorted by win count."""
     pipeline = [
         {"$match": {"winner_id": {"$exists": True, "$ne": "bot", "$type": "long"}}},
         {"$group": {"_id": "$winner_id", "wins": {"$sum": 1}}},
         {"$sort": {"wins": -1}}
     ]
     rankings = list(matches_col.aggregate(pipeline))
-    for idx, r in enumerate(rankings):
-        if r["_id"] == int(user_id):
-            return idx + 1
+    
+    real_list = []
+    real_wins_map = {}
+    for r in rankings:
+        uid = r["_id"]
+        real_wins_map[uid] = r["wins"]
+        user = get_user(uid)
+        if user and not user.get("is_banned", False):
+            real_list.append({
+                "user_id": uid,
+                "username": user.get("username", "Unknown"),
+                "first_name": user.get("first_name", ""),
+                "wins": r["wins"]
+            })
+            
+    # Include all other registered active users with 0 wins
+    all_users = list(users_col.find({"is_banned": False}))
+    for u in all_users:
+        if u["_id"] not in real_wins_map:
+            real_list.append({
+                "user_id": u["_id"],
+                "username": u.get("username", "Player"),
+                "first_name": u.get("first_name", ""),
+                "wins": 0
+            })
+            
+    # Combine real and demo users
+    combined = list(real_list)
+    combined.extend(DEMO_USERS)
+    
+    # Sort combined list by wins descending, then by username as secondary sort
+    combined.sort(key=lambda x: (-x["wins"], x["username"]))
+    
+    # Assign ranks
+    leaderboard = []
+    for idx, player in enumerate(combined):
+        player["rank"] = idx + 1
+        leaderboard.append(player)
+        
+    return leaderboard
+
+def get_user_rank(user_id):
+    """Determine the specific rank of a user."""
+    leaderboard = get_leaderboard()
+    for player in leaderboard:
+        if player["user_id"] == int(user_id):
+            return player["rank"]
     return 999  # Unranked
 
 # --- Daily Missions & Streak Claim Helper ---
@@ -673,7 +755,7 @@ def claim_referral_reward(user_id, tier):
     if tier in claimed:
         return False, "Referral tier reward already claimed"
         
-    referral_count = user.get("referrals_count", 0)
+    referral_count = get_valid_referrals_count(user_id)
     
     # Milestone requirements
     milestones = {
@@ -1304,6 +1386,7 @@ def get_free_fire_events():
             "map": ev["map"],
             "entry_fee": ev["entry_fee"],
             "prize_per_kill": ev["prize_per_kill"],
+            "booyah_prize": ev.get("booyah_prize", 0.0),
             "max_participants": ev["max_participants"],
             "start_time": ev["start_time"],
             "end_time": ev["end_time"],
@@ -1381,9 +1464,9 @@ def join_free_fire_event(user_id, event_id, slot_number):
     
     return True, "Successfully joined Free Fire tournament"
 
-def declare_free_fire_results(event_id, kills_data):
+def declare_free_fire_results(event_id, kills_data, booyah_slot=None):
     """
-    Distributes rewards to registered Free Fire tournament participants based on kills.
+    Distributes rewards to registered Free Fire tournament participants based on kills and booyah winner.
     kills_data: dict of slot_number (str) -> kills (int)
     """
     try:
@@ -1397,6 +1480,8 @@ def declare_free_fire_results(event_id, kills_data):
         
     slots = ev.get("slots", {})
     prize_per_kill = ev.get("prize_per_kill", 4.0)
+    booyah_prize = ev.get("booyah_prize", 0.0)
+    entry_fee = ev.get("entry_fee", 0.0)
     
     from bot.client import bot as bot_client
     import asyncio
@@ -1407,31 +1492,49 @@ def declare_free_fire_results(event_id, kills_data):
         occupant = slots.get(slot_key)
         if occupant:
             user_id = occupant["user_id"]
-            prize_amount = float(kills) * prize_per_kill
+            kills_reward = float(kills) * prize_per_kill
             
-            if prize_amount > 0:
+            is_booyah_winner = (booyah_slot is not None and str(booyah_slot).strip() == slot_key)
+            booyah_reward = booyah_prize if is_booyah_winner else 0.0
+            
+            total_prize = kills_reward + booyah_reward
+            
+            if total_prize > 0:
+                tx_type = "free_fire_free_win" if entry_fee == 0.0 else "match_win"
                 update_balance(
                     user_id=user_id,
-                    amount=prize_amount,
-                    tx_type="match_win",
+                    amount=total_prize,
+                    tx_type=tx_type,
                     details={
                         "game": "free_fire",
                         "event_id": event_id,
                         "slot": slot_key,
                         "kills": kills,
-                        "prize_per_kill": prize_per_kill
+                        "prize_per_kill": prize_per_kill,
+                        "booyah_winner": is_booyah_winner,
+                        "booyah_prize": booyah_reward
                     }
                 )
             
             # Send bot notification
             try:
+                dest = "deposited amount (Free Tournament)" if entry_fee == 0.0 else "winnings"
                 notification_text = (
                     f"🏆 **Free Fire Tournament Results declared!**\n\n"
                     f"Event: {ev['mode']} - {ev['map']} ({ev.get('date', 'N/A')})\n"
                     f"Character Slot: **#{slot_key}**\n"
                     f"Kills: **{kills}**\n"
-                    f"💰 **Prize Won:** Rs {prize_amount:.2f} (Rs {prize_per_kill:.2f} per kill)\n\n"
-                    f"Amount credited to your wallet balance."
+                )
+                if is_booyah_winner and booyah_reward > 0:
+                    notification_text += f"🎉 **Booyah Winner!**\n"
+                
+                details_text = f"Rs {prize_per_kill:.2f} per kill"
+                if is_booyah_winner and booyah_reward > 0:
+                    details_text += f" + Rs {booyah_reward:.2f} Booyah"
+                    
+                notification_text += (
+                    f"💰 **Total Prize Won:** Rs {total_prize:.2f} ({details_text})\n\n"
+                    f"Amount credited to your wallet {dest}."
                 )
                 asyncio.run_coroutine_threadsafe(
                     bot_client.send_message(user_id, notification_text),
