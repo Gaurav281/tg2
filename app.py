@@ -19,9 +19,9 @@ from database import (
     get_user, create_user, update_balance, get_transaction_history,
     get_match_history, get_leaderboard, get_user_rank, claim_daily_streak,
     claim_daily_mission, claim_referral_reward, save_match_result, tasks_col,
-    save_feedback, update_free_fire_profile, get_active_car_event_cycles,
+    update_free_fire_profile, get_active_car_event_cycles,
     join_car_event, submit_car_score, get_free_fire_events, join_free_fire_event,
-    get_active_cricket_cycle, join_cricket_event, submit_cricket_score
+    get_active_cricket_cycle, join_cricket_event, submit_cricket_score, submit_invite_code
 )
 from matchmaking import matchmaker
 from game import HandCricketMatch
@@ -258,6 +258,7 @@ def get_user_api(user_id):
             "streak": user.get("streak", 0),
             "last_streak_claim": user.get("last_streak_claim").isoformat() if user.get("last_streak_claim") else None,
             "referrals_count": user.get("referrals_count", 0),
+            "referred_by": user.get("referred_by"),
             "referral_claimed": user.get("referral_claimed", []),
             "daily_missions": user.get("daily_missions", {}),
             "is_banned": user.get("is_banned", False),
@@ -403,22 +404,18 @@ def claim_referral_api(user_id):
     else:
         return jsonify({"success": False, "error": res}), 400
 
-@app.route("/api/feedback/<user_id>", methods=["POST"])
-def submit_feedback_api(user_id):
-    user_id = int(user_id)
-    user = get_user(user_id)
-    if not user:
-        return jsonify({"success": False, "message": "User not found"}), 404
-
+@app.route("/api/submit-invite-code/<user_id>", methods=["POST"])
+def submit_invite_code_api(user_id):
     data = request.json or {}
-    selected_games = data.get("selected_games", [])
-    other_game = data.get("other_game", "")
-    likes_game = data.get("likes_game", "")
-
-    # Save to database
-    save_feedback(user_id, selected_games, other_game, likes_game)
-
-    return jsonify({"success": True, "message": "Feedback submitted successfully"})
+    invite_code = data.get("invite_code")
+    if not invite_code:
+        return jsonify({"success": False, "error": "Missing invite_code"}), 400
+        
+    success, res = submit_invite_code(user_id, invite_code)
+    if success:
+        return jsonify({"success": True, "message": res}), 200
+    else:
+        return jsonify({"success": False, "error": res}), 400
 
 @app.route("/api/user/profile/<user_id>", methods=["POST"])
 def update_profile_route(user_id):

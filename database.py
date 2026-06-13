@@ -122,6 +122,36 @@ def create_user(user_id, username, first_name, referred_by=None):
         
     return user_doc
 
+def submit_invite_code(user_id, invite_code):
+    user_id = int(user_id)
+    user = get_user(user_id)
+    if not user:
+        return False, "User not found"
+        
+    if user.get("referred_by"):
+        return False, "You have already set an inviter."
+        
+    # Find inviter
+    inviter = users_col.find_one({"unique_id": str(invite_code).strip().upper()})
+    if not inviter:
+        return False, "Invalid invite code"
+        
+    inviter_id = inviter["_id"]
+    if inviter_id == user_id:
+        return False, "You cannot enter your own invite code."
+        
+    # Update user's referred_by
+    users_col.update_one(
+        {"_id": user_id},
+        {"$set": {"referred_by": inviter_id}}
+    )
+    # Increment inviter's referral count
+    users_col.update_one(
+        {"_id": inviter_id},
+        {"$inc": {"referrals_count": 1}}
+    )
+    return True, "Invite code submitted successfully!"
+
 def update_balance(user_id, amount, tx_type, details=None):
     """
     Atomically update user balance (total, deposit, winning) and log a transaction.
@@ -774,17 +804,6 @@ def get_pending_deposits():
 def get_pending_redeems():
     return list(transactions_col.find({"type": "redeem", "status": "pending"}).sort("created_at", -1))
 
-def save_feedback(user_id, selected_games, other_game, likes_game):
-    """Saves user feedback to the feedbacks collection."""
-    feedback_doc = {
-        "user_id": int(user_id),
-        "selected_games": selected_games,
-        "other_game": other_game,
-        "likes_game": likes_game,
-        "created_at": datetime.now(timezone.utc)
-    }
-    return feedbacks_col.insert_one(feedback_doc).inserted_id
-
 # --- Profile Section Helpers ---
 def update_free_fire_profile(user_id, ff_username, ff_uid):
     """Update user's Free Fire profile details."""
@@ -838,6 +857,18 @@ def get_active_car_event_cycles(user_id):
         elif played_list:
             user_score = max(p.get("score", 0) for p in played_list)
             
+        # Collect list of scores from participants
+        scores_list = []
+        for p in participants:
+            if p["played"]:
+                scores_list.append({
+                    "username": p.get("username") or f"User_{p['user_id']}",
+                    "score": p.get("score", 0),
+                    "user_id": p["user_id"]
+                })
+        # Sort by score descending
+        scores_list.sort(key=lambda x: x["score"], reverse=True)
+            
         formatted.append({
             "id": str(cyc["_id"]),
             "event_id": cyc["event_id"],
@@ -850,7 +881,8 @@ def get_active_car_event_cycles(user_id):
             "user_score": user_score,
             "status": cyc["status"],
             "free_joined_count": free_joined_count,
-            "free_limit": free_limit
+            "free_limit": free_limit,
+            "other_scores": scores_list
         })
     return formatted
 
@@ -1423,18 +1455,28 @@ def declare_free_fire_results(event_id, kills_data):
 # --- Seeding Routine ---
 def seed_default_events():
     """Seed initial Car Game active cycles and Free Fire events if database is empty."""
-    # Drop and re-seed if we detect old event configuration (e.g. Event 1 entry fee is not 0.0)
+    # Drop and re-seed if we detect old event configuration
     e1 = car_event_cycles_col.find_one({"event_id": 1, "status": "active"})
-    if e1 and e1.get("entry_fee") != 0.0:
-        print("Old event configuration detected. Re-seeding Car Game cycles...")
+    e2 = car_event_cycles_col.find_one({"event_id": 2, "status": "active"})
+    e3 = car_event_cycles_col.find_one({"event_id": 3, "status": "active"})
+    
+    reseed_needed = False
+    if not e1 or e1.get("max_participants") != 5:
+        reseed_needed = True
+    if not e2 or e2.get("max_participants") != 5 or e2.get("prizes", {}).get("2") != 1.5:
+        reseed_needed = True
+    if not e3 or e3.get("max_participants") != 5 or e3.get("entry_fee") != 2.0:
+        reseed_needed = True
+        
+    if reseed_needed:
+        print("Old/modified event configuration detected. Re-seeding Car Game cycles...")
         car_event_cycles_col.delete_many({})
 
     # Seed Car Game Event 1, 2, 3 cycles
-    # Event 1: Free (Watch 3 Ads), Event 2: Rs 1.00, Event 3: Rs 3.00
     for eid, fee, participants, prizes in [
-        (1, 0.0, 10, {"1": 0.5}),
-        (2, 1.0, 10, {"1": 4.0, "2": 3.0, "3": 1.0}),
-        (3, 3.0, 20, {"1": 12.0, "2": 9.0, "3": 7.0, "4": 6.0, "5": 5.0, "6": 4.0, "7": 3.0, "8": 2.0})
+        (1, 0.0, 5, {"1": 0.5}),
+        (2, 1.0, 5, {"1": 2.5, "2": 1.5}),
+        (3, 2.0, 5, {"1": 5.0, "2": 4.0})
     ]:
         active = car_event_cycles_col.find_one({"event_id": eid, "status": "active"})
         if not active:
