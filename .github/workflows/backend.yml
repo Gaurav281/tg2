@@ -1,0 +1,134 @@
+name: Battle Play Backend
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.10.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10.11"
+          cache: "pip"
+
+      - name: Create Environment File
+        run: |
+          cat > .env << 'EOF'
+          API_ID=26275561
+          API_HASH=cec50cf5848bfe6794dc9a934b47cf62
+          BOT_TOKEN=8846126721:AAF5djjanPPtP1PACa0geJqtUNweRNK5Vhc
+          MONGO_URI=mongodb+srv://gauravpushpa28_db_user:c6o6bVkuzF9CdGCB@cluster0.iwh6rby.mongodb.net/hand_cricket_bot?appName=Cluster0
+          ADMIN_ID=5802486388
+          ADMIN_UPI=gauravpushpa28@okaxis
+          AROLINKS_API_KEY=225febf7630f8333e09487597ed69d4fe0beeba0
+          VPLINK_API_KEY=67eec07b2fae441a88c15be03fcb70d4d71d4b43
+          WEB_APP_URL=https://battleplay1.netlify.app/
+          PORT=5000
+          EOF
+
+      - name: Upgrade Pip
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Verify Environment
+        run: |
+          python --version
+          pip --version
+
+      - name: Start Backend
+        run: |
+          nohup python app.py > server.log 2>&1 &
+          echo $! > app.pid
+
+          echo "Waiting for backend startup..."
+          sleep 30
+
+          echo "===== SERVER LOG ====="
+          cat server.log || true
+
+      - name: Verify Backend Process
+        run: |
+          echo "===== PYTHON PROCESSES ====="
+          ps aux | grep python || true
+
+      - name: Verify Local API
+        run: |
+          echo "===== TESTING LOCAL API ====="
+
+          for i in {1..20}; do
+            if curl -s http://127.0.0.1:5000 > /dev/null; then
+              echo "Backend is running!"
+              echo ""
+              echo "===== API RESPONSE ====="
+              curl http://127.0.0.1:5000
+              exit 0
+            fi
+
+            echo "Waiting for backend..."
+            sleep 5
+          done
+
+          echo ""
+          echo "===== BACKEND FAILED TO START ====="
+          cat server.log
+          exit 1
+
+      - name: Install Cloudflare Tunnel
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared-linux-amd64
+          sudo mv cloudflared-linux-amd64 /usr/local/bin/cloudflared
+
+      - name: Start Cloudflare Tunnel
+        run: |
+          nohup cloudflared tunnel --url http://127.0.0.1:5000 > cloudflared.log 2>&1 &
+
+          echo "Waiting for Cloudflare Tunnel..."
+          sleep 20
+
+          echo "===== CLOUDFLARE LOG ====="
+          cat cloudflared.log
+
+      - name: Extract Public URL
+        run: |
+          URL=$(grep -o 'https://[-0-9a-zA-Z]*\.trycloudflare\.com' cloudflared.log | head -n 1)
+
+          echo ""
+          echo "========================================"
+          echo "PUBLIC API URL:"
+          echo "$URL"
+          echo "========================================"
+          echo ""
+
+          if [ -z "$URL" ]; then
+            echo "Cloudflare URL not found"
+            cat cloudflared.log
+            exit 1
+          fi
+
+      - name: Keep Runner Alive
+        run: |
+          echo "Backend running..."
+          echo "Workflow will remain active for 6 hours."
+
+          for i in {1..72}; do
+            echo "Heartbeat $(date)"
+            sleep 300
+          done
