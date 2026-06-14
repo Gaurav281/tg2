@@ -768,8 +768,18 @@ def claim_referral_reward(user_id, tier=None):
     claimed_count = user.get("referrals_claimed_count", 0)
     
     new_referrals = valid_count - claimed_count
-    if new_referrals <= 0:
-        return False, "No new referral rewards to claim. Invite more friends to claim rewards."
+    if new_referrals < 25:
+        return False, "You must invite at least 25 friends to claim the reward."
+        
+    # Check deposit requirement
+    pipeline = [
+        {"$match": {"user_id": user_id, "type": "deposit", "status": "approved"}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+    ]
+    dep_res = list(transactions_col.aggregate(pipeline))
+    total_deposited = dep_res[0]["total"] if dep_res else 0.0
+    if total_deposited < 20.0:
+        return False, "You have never deposited any amount. You must deposit min of 20rs to claim the reward."
         
     reward_amt = round(new_referrals * 1.00, 2)
     
@@ -1152,7 +1162,7 @@ def resolve_car_event_cycle(cycle_id):
         print(f"Resolving Event {cyc['event_id']}, Rank {rank}: User {p['user_id']} with score {p['score']} wins Rs {prize}")
         
         if prize > 0:
-            tx_type = "car_game_free_win" if cyc["event_id"] == 1 else "match_win"
+            tx_type = "car_game_free_win" if cyc.get("entry_fee", 0.0) == 0.0 or cyc["event_id"] == 1 else "match_win"
             # Credit account
             update_balance(
                 user_id=p["user_id"],
