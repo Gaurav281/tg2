@@ -78,17 +78,19 @@ jobs:
               echo ""
               echo "===== API RESPONSE ====="
               curl http://127.0.0.1:5000
-              exit 0
+              break
             fi
 
             echo "Waiting for backend..."
             sleep 5
           done
 
-          echo ""
-          echo "===== BACKEND FAILED TO START ====="
-          cat server.log
-          exit 1
+          if ! curl -s http://127.0.0.1:5000 > /dev/null; then
+            echo ""
+            echo "===== BACKEND FAILED TO START ====="
+            cat server.log
+            exit 1
+          fi
 
       - name: Install Cloudflare Tunnel
         run: |
@@ -127,56 +129,40 @@ jobs:
           echo "========================================"
           echo ""
 
-      - name: Get Netlify Environment Variable ID
-        id: netlify_env
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-        run: |
-          curl -s \
-            -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
-            "https://api.netlify.com/api/v1/sites/$NETLIFY_SITE_ID/env" \
-            > env.json
-
-          echo "===== NETLIFY ENV VARIABLES ====="
-          cat env.json
-
-          ENV_ID=$(jq -r '.[] | select(.key=="VITE_API_BASE_URL") | .id' env.json)
-
-          echo "ENV_ID=$ENV_ID"
-
-          if [ -z "$ENV_ID" ] || [ "$ENV_ID" = "null" ]; then
-            echo "VITE_API_BASE_URL variable not found"
-            exit 1
-          fi
-
-          echo "ENV_ID=$ENV_ID" >> $GITHUB_ENV
-
       - name: Update Netlify Environment Variable
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_ACCOUNT_ID: ${{ secrets.NETLIFY_ACCOUNT_ID }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
-          echo "Updating VITE_API_BASE_URL with:"
-          echo "$PUBLIC_URL"
+          echo "Updating VITE_API_BASE_URL to: $PUBLIC_URL"
 
-          curl -X PATCH \
-            "https://api.netlify.com/api/v1/sites/$NETLIFY_SITE_ID/env/$ENV_ID" \
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
+            "https://api.netlify.com/api/v1/accounts/${NETLIFY_ACCOUNT_ID}/env/VITE_API_BASE_URL?site_id=${NETLIFY_SITE_ID}" \
             -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{
+              \"key\": \"VITE_API_BASE_URL\",
               \"values\": [
                 {
                   \"value\": \"${PUBLIC_URL}\",
                   \"context\": \"all\"
                 }
               ]
-            }"
+            }")
 
-      - name: Verify Updated Variable
-        run: |
-          echo "Updated VITE_API_BASE_URL:"
-          echo "$PUBLIC_URL"
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+
+          echo "Response code: $HTTP_CODE"
+          echo "Response body: $BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Failed to update env var!"
+            exit 1
+          fi
+
+          echo "Successfully updated VITE_API_BASE_URL"
 
       - name: Trigger Netlify Redeploy
         env:
