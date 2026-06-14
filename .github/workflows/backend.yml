@@ -75,8 +75,6 @@ jobs:
           for i in {1..20}; do
             if curl -s http://127.0.0.1:5000 > /dev/null; then
               echo "Backend is running!"
-              echo ""
-              echo "===== API RESPONSE ====="
               curl http://127.0.0.1:5000
               exit 0
             fi
@@ -85,8 +83,7 @@ jobs:
             sleep 5
           done
 
-          echo ""
-          echo "===== BACKEND FAILED TO START ====="
+          echo "Backend failed to start"
           cat server.log
           exit 1
 
@@ -101,21 +98,15 @@ jobs:
           nohup cloudflared tunnel --url http://127.0.0.1:5000 > cloudflared.log 2>&1 &
 
           echo "Waiting for Cloudflare Tunnel..."
-          sleep 20
+          sleep 25
 
           echo "===== CLOUDFLARE LOG ====="
           cat cloudflared.log
 
-      - name: Extract Public URL
+      - name: Extract Cloudflare URL
+        id: tunnel
         run: |
           URL=$(grep -o 'https://[-0-9a-zA-Z]*\.trycloudflare\.com' cloudflared.log | head -n 1)
-
-          echo ""
-          echo "========================================"
-          echo "PUBLIC API URL:"
-          echo "$URL"
-          echo "========================================"
-          echo ""
 
           if [ -z "$URL" ]; then
             echo "Cloudflare URL not found"
@@ -123,10 +114,81 @@ jobs:
             exit 1
           fi
 
+          echo "PUBLIC_URL=$URL" >> $GITHUB_ENV
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+          echo "========================================"
+          echo "Cloudflare URL:"
+          echo "$URL"
+          echo "========================================"
+
+      - name: Get Netlify Env Variable ID
+        id: netlify_env
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          curl -s \
+            -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
+            "https://api.netlify.com/api/v1/accounts" > /dev/null
+
+          curl -s \
+            -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
+            "https://api.netlify.com/api/v1/sites/$NETLIFY_SITE_ID/env" \
+            > env.json
+
+          ENV_ID=$(jq -r '.[] | select(.key=="VITE_API_URL") | .id' env.json)
+
+          echo "ENV_ID=$ENV_ID" >> $GITHUB_ENV
+
+          if [ -z "$ENV_ID" ] || [ "$ENV_ID" = "null" ]; then
+            echo "VITE_API_URL variable not found in Netlify"
+            cat env.json
+            exit 1
+          fi
+
+      - name: Update Netlify Environment Variable
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          curl -X PATCH \
+            "https://api.netlify.com/api/v1/sites/$NETLIFY_SITE_ID/env/$ENV_ID" \
+            -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"values\": [
+                {
+                  \"value\": \"${PUBLIC_URL}\",
+                  \"context\": \"all\"
+                }
+              ]
+            }"
+
+      - name: Verify Updated Variable
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          echo "Updated VITE_API_URL:"
+          echo "$PUBLIC_URL"
+
+      - name: Trigger Netlify Redeploy
+        env:
+          NETLIFY_BUILD_HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
+        run: |
+          echo "Triggering Netlify build..."
+          curl -X POST "$NETLIFY_BUILD_HOOK"
+
+      - name: Wait For Redeploy Start
+        run: |
+          echo "Waiting for Netlify redeploy..."
+          sleep 30
+
       - name: Keep Runner Alive
         run: |
           echo "Backend running..."
-          echo "Workflow will remain active for 6 hours."
+          echo "Cloudflare URL: $PUBLIC_URL"
 
           for i in {1..72}; do
             echo "Heartbeat $(date)"
