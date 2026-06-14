@@ -137,12 +137,12 @@ jobs:
             "https://api.netlify.com/api/v1/sites/$NETLIFY_SITE_ID/env" \
             > env.json
 
-          ENV_ID=$(jq -r '.[] | select(.key=="VITE_API_URL") | .id' env.json)
+          ENV_ID=$(jq -r '.[] | select(.key=="VITE_API_BASE_URL") | .id' env.json)
 
           echo "ENV_ID=$ENV_ID" >> $GITHUB_ENV
 
           if [ -z "$ENV_ID" ] || [ "$ENV_ID" = "null" ]; then
-            echo "VITE_API_URL variable not found in Netlify"
+            echo "VITE_API_BASE_URL variable not found in Netlify"
             cat env.json
             exit 1
           fi
@@ -170,7 +170,7 @@ jobs:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
-          echo "Updated VITE_API_URL:"
+          echo "Updated VITE_API_BASE_URL:"
           echo "$PUBLIC_URL"
 
       - name: Trigger Netlify Redeploy
