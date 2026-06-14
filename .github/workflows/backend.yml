@@ -132,16 +132,21 @@ jobs:
       - name: Update Netlify Environment Variable
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_ACCOUNT_ID: ${{ secrets.NETLIFY_ACCOUNT_ID }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
           echo "Updating VITE_API_BASE_URL to: $PUBLIC_URL"
 
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
-            "https://api.netlify.com/api/v1/accounts/${NETLIFY_ACCOUNT_ID}/env/VITE_API_BASE_URL?site_id=${NETLIFY_SITE_ID}" \
+          # Delete existing variable (ignore error if it doesn't exist)
+          curl -s -X DELETE \
+            "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/env/VITE_API_BASE_URL" \
+            -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" || true
+
+          # Create variable fresh
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/env" \
             -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{
+            -d "[{
               \"key\": \"VITE_API_BASE_URL\",
               \"values\": [
                 {
@@ -149,7 +154,7 @@ jobs:
                   \"context\": \"all\"
                 }
               ]
-            }")
+            }]")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | head -n-1)
@@ -157,7 +162,7 @@ jobs:
           echo "Response code: $HTTP_CODE"
           echo "Response body: $BODY"
 
-          if [ "$HTTP_CODE" != "200" ]; then
+          if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
             echo "Failed to update env var!"
             exit 1
           fi
@@ -169,20 +174,32 @@ jobs:
           NETLIFY_BUILD_HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
         run: |
           echo "Triggering Netlify redeploy..."
-          curl -X POST "$NETLIFY_BUILD_HOOK"
+          HOOK_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$NETLIFY_BUILD_HOOK")
+          HOOK_CODE=$(echo "$HOOK_RESPONSE" | tail -n1)
+
+          echo "Build hook response code: $HOOK_CODE"
+
+          if [ "$HOOK_CODE" != "200" ] && [ "$HOOK_CODE" != "201" ]; then
+            echo "Warning: Build hook may have failed (code: $HOOK_CODE)"
+          else
+            echo "Netlify redeploy triggered successfully!"
+          fi
 
       - name: Wait For Redeploy Start
         run: |
-          echo "Waiting for Netlify redeploy..."
+          echo "Waiting for Netlify redeploy to begin..."
           sleep 30
+          echo "Redeploy should be underway."
 
       - name: Keep Runner Alive
         run: |
-          echo "Backend running..."
+          echo "========================================"
+          echo "Backend running!"
           echo "Cloudflare URL: $PUBLIC_URL"
           echo "Workflow will remain active for 6 hours."
+          echo "========================================"
 
           for i in {1..72}; do
-            echo "Heartbeat $(date)"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Heartbeat $i/72 — URL: $PUBLIC_URL"
             sleep 300
           done
