@@ -555,17 +555,12 @@ def get_leaderboard():
                 "first_name": u.get("first_name", ""),
                 "wins": 0
             })
-            
-    # Combine real and demo users
-    combined = list(real_list)
-    combined.extend(DEMO_USERS)
-    
-    # Sort combined list by wins descending, then by username as secondary sort
-    combined.sort(key=lambda x: (-x["wins"], x["username"]))
+    # Sort list by wins descending, then by username as secondary sort
+    real_list.sort(key=lambda x: (-x["wins"], x["username"]))
     
     # Assign ranks
     leaderboard = []
-    for idx, player in enumerate(combined):
+    for idx, player in enumerate(real_list):
         player["rank"] = idx + 1
         leaderboard.append(player)
         
@@ -699,6 +694,32 @@ def check_played_paid_match_today(user_id):
         
     return False
 
+def check_daily_transaction_limits(user_id):
+    """
+    Check if user is within the daily limits of 10 deposits and 1 redeem.
+    Returns (can_deposit: bool, can_redeem: bool, deposit_count: int, redeem_count: int)
+    """
+    user_id = int(user_id)
+    now = datetime.now(IST)
+    start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_today = start_of_today + timedelta(days=1)
+    
+    # Count deposit transactions created today
+    deposit_count = transactions_col.count_documents({
+        "user_id": user_id,
+        "type": "deposit",
+        "created_at": {"$gte": start_of_today, "$lt": end_of_today}
+    })
+    
+    # Count redeem transactions created today
+    redeem_count = transactions_col.count_documents({
+        "user_id": user_id,
+        "type": "redeem",
+        "created_at": {"$gte": start_of_today, "$lt": end_of_today}
+    })
+    
+    return (deposit_count < 10, redeem_count < 1, deposit_count, redeem_count)
+
 def claim_daily_streak(user_id):
     """Claim daily streak reward."""
     user_id = int(user_id)
@@ -770,24 +791,35 @@ def claim_referral_reward(user_id, tier=None):
     
     new_referrals = valid_count - claimed_count
     if new_referrals < 25:
-        return False, "You must invite at least 25 friends to claim the reward."
+        return False, "min rs25 invites required to claim"
         
-    # Check deposit requirement
-    pipeline = [
-        {"$match": {"user_id": user_id, "type": "deposit", "status": "approved"}},
-        {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
-    ]
-    dep_res = list(transactions_col.aggregate(pipeline))
-    total_deposited = dep_res[0]["total"] if dep_res else 0.0
-    if total_deposited < 20.0:
-        return False, "You have never deposited any amount. You must deposit min of 20rs to claim the reward."
+    # Check deposit requirement: has deposited min 20 once (either single deposit >= 20, or sum >= 20)
+    has_deposited_20 = transactions_col.find_one({
+        "user_id": user_id,
+        "type": "deposit",
+        "status": "approved",
+        "amount": {"$gte": 20.0}
+    }) is not None
+    
+    if not has_deposited_20:
+        pipeline = [
+            {"$match": {"user_id": user_id, "type": "deposit", "status": "approved"}},
+            {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+        ]
+        dep_res = list(transactions_col.aggregate(pipeline))
+        total_deposited = dep_res[0]["total"] if dep_res else 0.0
+        if total_deposited < 20.0:
+            return False, "You have never deposited any amount. You must deposit min of 20rs to claim the reward."
         
     reward_amt = round(new_referrals * 1.00, 2)
     
-    # Update DB
+    # Update DB: mark referrals claimed and give +1 free car game chance
     users_col.update_one(
         {"_id": user_id},
-        {"$set": {"referrals_claimed_count": valid_count}}
+        {
+            "$set": {"referrals_claimed_count": valid_count},
+            "$inc": {"free_car_game_chances": 1}
+        }
     )
     
     update_balance(user_id, reward_amt, "referral_reward", {"new_referrals": new_referrals, "before_count": claimed_count, "after_count": valid_count})
@@ -965,6 +997,8 @@ def get_active_car_event_cycles(user_id):
         }
     })
     
+    user = get_user(user_id)
+    extra_chances = user.get("free_car_game_chances", 0) if user else 0
     # Check if user has deposited min Rs 10
     has_deposit_10 = transactions_col.find_one({
         "user_id": int(user_id),
@@ -972,7 +1006,7 @@ def get_active_car_event_cycles(user_id):
         "status": "approved",
         "amount": {"$gte": 10.0}
     }) is not None
-    free_limit = 5 if has_deposit_10 else 3
+    free_limit = (5 if has_deposit_10 else 3) + extra_chances
     
     formatted = []
     for cyc in cycles:
@@ -1060,12 +1094,13 @@ def join_car_event(user_id, event_id):
             "status": "approved",
             "amount": {"$gte": 10.0}
         }) is not None
-        free_limit = 5 if has_deposit_10 else 3
-        if free_joined_count >= free_limit:
+        extra_chances = user.get("free_car_game_chances", 0)
+        allowed_limit = free_limit + extra_chances
+        if free_joined_count >= allowed_limit:
             if free_limit == 3:
-                return False, "You have reached your limit of 3 free games. Deposit min Rs 10 to get 2 more chances!"
+                return False, f"You have reached your limit of {allowed_limit} free games. Deposit min Rs 10 to get 2 more chances!"
             else:
-                return False, "You have reached your maximum limit of 5 free games."
+                return False, f"You have reached your maximum limit of {allowed_limit} free games."
         
     # Deduct entry fee
     fee = cyc["entry_fee"]
@@ -1538,12 +1573,12 @@ def declare_free_fire_results(event_id, kills_data, booyah_slot=None):
     from bot.client import bot as bot_client
     import asyncio
     
-    # Process each reward
-    for slot_key, kills in kills_data.items():
+    # Process each slot occupant
+    for slot_key, occupant in slots.items():
         slot_key = str(slot_key)
-        occupant = slots.get(slot_key)
         if occupant:
             user_id = occupant["user_id"]
+            kills = int(kills_data.get(slot_key, 0))
             kills_reward = float(kills) * prize_per_kill
             
             is_booyah_winner = (booyah_slot is not None and str(booyah_slot).strip() == slot_key)
@@ -1552,7 +1587,7 @@ def declare_free_fire_results(event_id, kills_data, booyah_slot=None):
             total_prize = kills_reward + booyah_reward
             
             if total_prize > 0:
-                tx_type = "free_fire_free_win" if entry_fee == 0.0 else "match_win"
+                tx_type = "free_fire_free_win" if entry_fee == 0.0 else "free_fire_win"
                 update_balance(
                     user_id=user_id,
                     amount=total_prize,
@@ -1567,6 +1602,35 @@ def declare_free_fire_results(event_id, kills_data, booyah_slot=None):
                         "booyah_prize": booyah_reward
                     }
                 )
+            
+            # Insert a match history record for EVERY participant
+            match_doc = {
+                "player_a": {
+                    "user_id": user_id,
+                    "username": occupant.get("ff_username") or occupant.get("username") or f"User {user_id}",
+                    "score": int(kills)
+                },
+                "player_b": {
+                    "user_id": -1,
+                    "username": f"FF {ev.get('mode', 'BR')}",
+                    "score": 0
+                },
+                "type": "Free Fire",
+                "winner_id": user_id if total_prize > 0 else "none",
+                "score_a": int(kills),
+                "score_b": 0,
+                "details": {
+                    "event_id": str(event_id),
+                    "mode": ev.get("mode"),
+                    "map": ev.get("map"),
+                    "slot": slot_key,
+                    "kills": int(kills),
+                    "prize": total_prize,
+                    "is_booyah": is_booyah_winner
+                },
+                "created_at": datetime.now(IST)
+            }
+            matches_col.insert_one(match_doc)
             
             # Send bot notification
             try:

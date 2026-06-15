@@ -310,6 +310,13 @@ async def main_menu_callback(client: Client, query: CallbackQuery):
 @bot.on_callback_query(filters.regex(r"^btn_add_coin$"))
 async def btn_add_coin_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
+    
+    from database import check_daily_transaction_limits
+    can_dep, _, _, _ = check_daily_transaction_limits(user_id)
+    if not can_dep:
+        await query.answer("❌ Daily deposit limit reached! You can only make 10 deposits per day.", show_alert=True)
+        return
+        
     user = get_user(user_id)
     balance = user.get("balance", 0.0) if user else 0.0
     
@@ -325,6 +332,12 @@ async def btn_add_coin_callback(client: Client, query: CallbackQuery):
 async def deposit_pack_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     amount = int(query.matches[0].group(1))
+    
+    from database import check_daily_transaction_limits
+    can_dep, _, _, _ = check_daily_transaction_limits(user_id)
+    if not can_dep:
+        await query.answer("❌ Daily deposit limit reached! You can only make 10 deposits per day.", show_alert=True)
+        return
     
     # Generate UPI QR code link
     # upi://pay?pa=UPI_ID&pn=Name&am=AMOUNT&cu=INR
@@ -357,6 +370,13 @@ async def deposit_pack_callback(client: Client, query: CallbackQuery):
 @bot.on_callback_query(filters.regex(r"^btn_redeem_coin$"))
 async def btn_redeem_coin_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
+    
+    from database import check_daily_transaction_limits
+    _, can_red, _, _ = check_daily_transaction_limits(user_id)
+    if not can_red:
+        await query.answer("❌ Daily redeem limit reached! You can only make 1 redeem per day.", show_alert=True)
+        return
+        
     user = get_user(user_id)
     balance = user.get("balance", 0.0) if user else 0.0
     

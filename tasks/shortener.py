@@ -10,7 +10,7 @@ from database import tasks_col, update_balance, to_ist
 
 def get_backend_url():
     import os
-    return os.getenv("BACKEND_URL", "https://tg2-w82m.onrender.com")
+    return os.getenv("BACKEND_URL", "https://tg2-production-9019.up.railway.app")
 
 def get_bot_username():
     import os

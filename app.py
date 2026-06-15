@@ -231,24 +231,25 @@ def get_user_api(user_id):
     })
     
     from database import free_fire_events_col
-    active_ff_room = None
+    active_ff_rooms = []
     try:
         for ev in free_fire_events_col.find():
             slots = ev.get("slots", {})
             for slot_key, slot_val in slots.items():
                 if slot_val and slot_val.get("user_id") == actual_user_id:
                     if ev.get("room_id") and ev.get("room_password"):
-                        active_ff_room = {
+                        active_ff_rooms.append({
                             "mode": ev["mode"],
                             "map": ev["map"],
                             "room_id": ev["room_id"],
                             "room_password": ev["room_password"],
                             "date": ev.get("date", ""),
                             "time": ev.get("start_time", "")
-                        }
+                        })
                     break
     except Exception as ex:
         print(f"Error checking active FF rooms: {ex}")
+    active_ff_room = active_ff_rooms[0] if active_ff_rooms else None
  
     from matchmaking import matchmaker
     paid_playing = matchmaker.get_paid_playing_count()
@@ -285,6 +286,7 @@ def get_user_api(user_id):
             "free_fire_username": user.get("free_fire_username", ""),
             "free_fire_uid": user.get("free_fire_uid", ""),
             "active_ff_room": active_ff_room,
+            "active_ff_rooms": active_ff_rooms,
             "joined_channel": joined_channel
         },
         "active_users": active_count,
@@ -372,13 +374,14 @@ def get_history_api(user_id):
     formatted_matches = []
     for m in match_history:
         formatted_matches.append({
-            "id": m["_id"],
+            "id": str(m["_id"]),
             "player_a": m["player_a"],
             "player_b": m["player_b"],
             "type": m["type"],
             "winner_id": m["winner_id"],
             "score_a": m["score_a"],
             "score_b": m["score_b"],
+            "details": m.get("details", {}),
             "created_at": to_ist(m["created_at"]).isoformat()
         })
         
@@ -992,6 +995,11 @@ def handle_submit_deposit_from_webapp(data):
     amount = int(data["amount"])
     upi_txn_id = data["upiTxnId"].strip()
     
+    from database import check_daily_transaction_limits
+    can_dep, _, _, _ = check_daily_transaction_limits(user_id)
+    if not can_dep:
+        return {"status": "error", "message": "Daily deposit limit reached! You can only make 10 deposits per day."}
+        
     if not upi_txn_id:
         return {"status": "error", "message": "UPI Transaction ID is required."}
         
@@ -1053,6 +1061,11 @@ def handle_submit_redeem_from_webapp(data):
     amount = int(data["amount"])
     upi_or_mobile = data["upiOrMobile"].strip()
     
+    from database import check_daily_transaction_limits
+    _, can_red, _, _ = check_daily_transaction_limits(user_id)
+    if not can_red:
+        return {"status": "error", "message": "Daily redeem limit reached! You can only make 1 redeem per day."}
+        
     if not upi_or_mobile:
         return {"status": "error", "message": "UPI ID or Mobile Number is required."}
         
