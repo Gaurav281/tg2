@@ -27,6 +27,7 @@ feedbacks_col = db["feedbacks"]
 car_event_cycles_col = db["car_event_cycles"]
 free_fire_events_col = db["free_fire_events"]
 cricket_event_cycles_col = db["cricket_event_cycles"]
+sub_admins_col = db["sub_admins"]
 
 # Programmatic Indexing for Safe Production Performance
 try:
@@ -1594,6 +1595,50 @@ def declare_free_fire_results(event_id, kills_data, booyah_slot=None):
             except Exception as e:
                 print(f"Failed to notify user {user_id}: {e}")
                 
+    # Calculate profit share for sub-admin if applicable
+    creator_id = ev.get("created_by")
+    if creator_id:
+        sub_admin = get_sub_admin(creator_id)
+        if sub_admin:
+            actual_participants = sum(1 for slot_val in slots.values() if slot_val is not None)
+            if actual_participants > 0:
+                max_kills = actual_participants - 1
+                max_payout = (max_kills * prize_per_kill) + booyah_prize
+                total_entry_fees = actual_participants * entry_fee
+                tournament_profit = round(total_entry_fees - max_payout, 2)
+                
+                if tournament_profit > 0:
+                    profit_pct = sub_admin.get("profit_percentage", 0.0)
+                    admin_share = round(tournament_profit * (profit_pct / 100.0), 2)
+                    if admin_share > 0:
+                        update_balance(
+                            user_id=creator_id,
+                            amount=admin_share,
+                            tx_type="admin_payout",
+                            details={
+                                "game": "free_fire",
+                                "event_id": event_id,
+                                "tournament_profit": tournament_profit,
+                                "profit_percentage": profit_pct
+                            }
+                        )
+                        # Notify the sub-admin via bot
+                        try:
+                            notification_text = (
+                                f"💰 **Sub-Admin Profit Share Credited!**\n\n"
+                                f"Event: {ev['mode']} - {ev['map']} ({ev.get('date', 'N/A')})\n"
+                                f"Participants: **{actual_participants}**\n"
+                                f"Tournament Profit: **Rs {tournament_profit:.2f}**\n"
+                                f"Your Share ({profit_pct}%): **Rs {admin_share:.2f}**\n\n"
+                                f"Amount has been credited to your winning balance."
+                            )
+                            asyncio.run_coroutine_threadsafe(
+                                bot_client.send_message(creator_id, notification_text),
+                                asyncio.get_event_loop()
+                            )
+                        except Exception as ne:
+                            print(f"Failed to notify sub-admin {creator_id}: {ne}")
+
     # Reset event slots and clear Room ID / Password so it restarts cycle
     reset_slots = {str(i): None for i in range(1, ev["max_participants"] + 1)}
     free_fire_events_col.update_one(
@@ -1605,6 +1650,53 @@ def declare_free_fire_results(event_id, kills_data, booyah_slot=None):
         }}
     )
     return True, "Results declared and rewards distributed successfully!"
+
+# --- Sub-Admins operations ---
+def is_sub_admin(user_id):
+    """Checks if the user is an active sub-admin."""
+    try:
+        user_id = int(user_id)
+    except (ValueError, TypeError):
+        return False
+    return sub_admins_col.find_one({"_id": user_id}) is not None
+
+def get_sub_admin(user_id):
+    """Retrieve sub-admin details."""
+    try:
+        user_id = int(user_id)
+    except (ValueError, TypeError):
+        return None
+    return sub_admins_col.find_one({"_id": user_id})
+
+def create_sub_admin(user_id, profit_percentage):
+    """Create or update a sub-admin."""
+    try:
+        user_id = int(user_id)
+        profit_percentage = float(profit_percentage)
+    except (ValueError, TypeError):
+        return False
+    sub_admins_col.update_one(
+        {"_id": user_id},
+        {"$set": {
+            "profit_percentage": profit_percentage,
+            "created_at": datetime.now(IST)
+        }},
+        upsert=True
+    )
+    return True
+
+def delete_sub_admin(user_id):
+    """Delete a sub-admin."""
+    try:
+        user_id = int(user_id)
+    except (ValueError, TypeError):
+        return False
+    sub_admins_col.delete_one({"_id": user_id})
+    return True
+
+def get_all_sub_admins():
+    """Retrieve all sub-admins."""
+    return list(sub_admins_col.find())
 
 # --- Seeding Routine ---
 def seed_default_events():

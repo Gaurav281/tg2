@@ -78,19 +78,17 @@ jobs:
               echo ""
               echo "===== API RESPONSE ====="
               curl http://127.0.0.1:5000
-              break
+              exit 0
             fi
 
             echo "Waiting for backend..."
             sleep 5
           done
 
-          if ! curl -s http://127.0.0.1:5000 > /dev/null; then
-            echo ""
-            echo "===== BACKEND FAILED TO START ====="
-            cat server.log
-            exit 1
-          fi
+          echo ""
+          echo "===== BACKEND FAILED TO START ====="
+          cat server.log
+          exit 1
 
       - name: Install Cloudflare Tunnel
         run: |
@@ -103,24 +101,14 @@ jobs:
           nohup cloudflared tunnel --url http://127.0.0.1:5000 > cloudflared.log 2>&1 &
 
           echo "Waiting for Cloudflare Tunnel..."
-          sleep 25
+          sleep 20
 
           echo "===== CLOUDFLARE LOG ====="
           cat cloudflared.log
 
-      - name: Extract Cloudflare URL
-        id: tunnel
+      - name: Extract Public URL
         run: |
           URL=$(grep -o 'https://[-0-9a-zA-Z]*\.trycloudflare\.com' cloudflared.log | head -n 1)
-
-          if [ -z "$URL" ]; then
-            echo "Cloudflare URL not found"
-            cat cloudflared.log
-            exit 1
-          fi
-
-          echo "PUBLIC_URL=$URL" >> $GITHUB_ENV
-          echo "url=$URL" >> $GITHUB_OUTPUT
 
           echo ""
           echo "========================================"
@@ -129,77 +117,18 @@ jobs:
           echo "========================================"
           echo ""
 
-      - name: Update Netlify Environment Variable
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-        run: |
-          echo "Updating VITE_API_BASE_URL to: $PUBLIC_URL"
-
-          # Delete existing variable (ignore error if it doesn't exist)
-          curl -s -X DELETE \
-            "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/env/VITE_API_BASE_URL" \
-            -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" || true
-
-          # Create variable fresh
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/env" \
-            -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "[{
-              \"key\": \"VITE_API_BASE_URL\",
-              \"values\": [
-                {
-                  \"value\": \"${PUBLIC_URL}\",
-                  \"context\": \"all\"
-                }
-              ]
-            }]")
-
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | head -n-1)
-
-          echo "Response code: $HTTP_CODE"
-          echo "Response body: $BODY"
-
-          if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
-            echo "Failed to update env var!"
+          if [ -z "$URL" ]; then
+            echo "Cloudflare URL not found"
+            cat cloudflared.log
             exit 1
           fi
 
-          echo "Successfully updated VITE_API_BASE_URL"
-
-      - name: Trigger Netlify Redeploy
-        env:
-          NETLIFY_BUILD_HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
-        run: |
-          echo "Triggering Netlify redeploy..."
-          HOOK_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$NETLIFY_BUILD_HOOK")
-          HOOK_CODE=$(echo "$HOOK_RESPONSE" | tail -n1)
-
-          echo "Build hook response code: $HOOK_CODE"
-
-          if [ "$HOOK_CODE" != "200" ] && [ "$HOOK_CODE" != "201" ]; then
-            echo "Warning: Build hook may have failed (code: $HOOK_CODE)"
-          else
-            echo "Netlify redeploy triggered successfully!"
-          fi
-
-      - name: Wait For Redeploy Start
-        run: |
-          echo "Waiting for Netlify redeploy to begin..."
-          sleep 30
-          echo "Redeploy should be underway."
-
       - name: Keep Runner Alive
         run: |
-          echo "========================================"
-          echo "Backend running!"
-          echo "Cloudflare URL: $PUBLIC_URL"
+          echo "Backend running..."
           echo "Workflow will remain active for 6 hours."
-          echo "========================================"
 
           for i in {1..72}; do
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Heartbeat $i/72 — URL: $PUBLIC_URL"
+            echo "Heartbeat $(date)"
             sleep 300
           done

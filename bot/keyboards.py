@@ -118,8 +118,16 @@ def get_rejoin_keyboard(user_id):
         [InlineKeyboardButton("❌ Forfeit/Cancel Match", callback_data="forfeit_match")]
     ])
 
-def get_admin_keyboard():
+def get_admin_keyboard(user_id=None):
     """Admin controls keyboard."""
+    from database import is_sub_admin
+    
+    if user_id is not None and is_sub_admin(user_id):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏆 Free Fire Events", callback_data="admin_ff_events")],
+            [InlineKeyboardButton("↩️ Back to Main Menu", callback_data="main_menu")]
+        ])
+        
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Stats & Analytics", callback_data="admin_stats")],
         [
@@ -135,6 +143,7 @@ def get_admin_keyboard():
             InlineKeyboardButton("📤 Pending Redeems", callback_data="admin_pending_red")
         ],
         [InlineKeyboardButton("🏆 Free Fire Events", callback_data="admin_ff_events")],
+        [InlineKeyboardButton("👥 Manage Sub-Admins", callback_data="admin_manage_sub_admins")],
         [InlineKeyboardButton("🔑 Manage Start Buttons", callback_data="admin_manage_buttons")],
         [InlineKeyboardButton("📣 Broadcast Message", callback_data="admin_broadcast")],
         [InlineKeyboardButton("↩️ Back to Main Menu", callback_data="main_menu")]

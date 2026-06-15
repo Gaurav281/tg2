@@ -20,7 +20,7 @@ from database import (
     get_unbanned_users, get_banned_users, get_all_users, get_finance_stats,
     get_pending_deposits, get_pending_redeems, approve_deposit,
     reject_deposit, approve_redeem, reject_redeem, cancel_redeem_by_user,
-    create_transaction
+    create_transaction, is_sub_admin, get_all_sub_admins, create_sub_admin, delete_sub_admin
 )
 from bot.keyboards import (
     get_start_keyboard, get_add_coin_keyboard, get_redeem_coin_keyboard,
@@ -30,6 +30,9 @@ from bot.keyboards import (
 from tasks.shortener import create_or_get_task, get_bot_username
 from matchmaking import matchmaker
 from bot.client import bot
+
+def is_admin_user(user_id):
+    return user_id == Config.ADMIN_ID or is_sub_admin(user_id)
 
 # Store last bot message ID for each user to maintain a single-message interface
 # Keys: user_id (int) -> Value: message_id (int)
@@ -204,7 +207,7 @@ async def start_handler(client: Client, message: Message):
 
     # Standard /start welcome
     balance = user.get("balance", 0.0) if user else 0.0
-    is_admin = (user_id == Config.ADMIN_ID)
+    is_admin = is_admin_user(user_id)
     
     welcome_text = (
         f"👋 **Welcome to Battle Play, {first_name}!**\n\n"
@@ -227,7 +230,7 @@ async def help_handler(client: Client, message: Message):
         "🔹 /help - View help guidelines\n\n"
         "You can play games and earn cash rewards directly in our Web App."
     )
-    await clean_send(client, user_id, help_text, reply_markup=get_start_keyboard(user_id, user_id == Config.ADMIN_ID))
+    await clean_send(client, user_id, help_text, reply_markup=get_start_keyboard(user_id, is_admin_user(user_id)))
 
 @bot.on_callback_query(filters.regex(r"^btn_join_tg$"))
 async def btn_join_tg_callback(client: Client, query: CallbackQuery):
@@ -272,7 +275,7 @@ async def forfeit_match_handler(client: Client, query: CallbackQuery):
     await query.answer("Match forfeited.")
     # Show main menu
     user = get_user(user_id)
-    is_admin = (user_id == Config.ADMIN_ID)
+    is_admin = is_admin_user(user_id)
     balance = user.get("balance", 0.0) if user else 0.0
     await query.edit_message_text(
         f"🏠 **Main Menu**\n\n💰 **Wallet Balance:** Rs {balance:.2f}\n\nSelect an option:",
@@ -294,7 +297,7 @@ async def main_menu_callback(client: Client, query: CallbackQuery):
         return
         
     balance = user.get("balance", 0.0) if user else 0.0
-    is_admin = (user_id == Config.ADMIN_ID)
+    is_admin = is_admin_user(user_id)
     
     await query.edit_message_text(
         f"🏠 **Main Menu**\n\n"
@@ -405,7 +408,7 @@ async def cancel_withdrawal_callback(client: Client, query: CallbackQuery):
         
     user = get_user(user_id)
     balance = user.get("balance", 0.0) if user else 0.0
-    is_admin = (user_id == Config.ADMIN_ID)
+    is_admin = is_admin_user(user_id)
     await query.edit_message_text(
         f"🏠 **Main Menu**\n\n💰 **Wallet Balance:** Rs {balance:.2f}\n\nSelect an option:",
         reply_markup=get_start_keyboard(user_id, is_admin)
@@ -542,9 +545,20 @@ async def user_text_handler(client: Client, message: Message):
     await clean_user_history(client, user_id, message.id)
 
     # Check admin states
-    if user_id == Config.ADMIN_ID and user_id in admin_states:
+    is_main_admin = (user_id == Config.ADMIN_ID)
+    is_sub = is_sub_admin(user_id)
+    if (is_main_admin or is_sub) and user_id in admin_states:
         state = admin_states[user_id]
         
+        # Check authorization
+        if state["action"] in ["wait_ff_create", "wait_ff_edit", "wait_ff_room", "wait_ff_result"]:
+            pass
+        elif is_main_admin:
+            pass
+        else:
+            admin_states.pop(user_id, None)
+            return
+
         # 1. Admin Broadcast
         if state["action"] == "wait_broadcast":
             admin_states.pop(user_id, None)
@@ -560,7 +574,7 @@ async def user_text_handler(client: Client, message: Message):
                 client,
                 user_id,
                 f"✅ Broadcast sent successfully to {sent_count} users.",
-                reply_markup=get_admin_keyboard()
+                reply_markup=get_admin_keyboard(user_id)
             )
             return
             
@@ -572,7 +586,7 @@ async def user_text_handler(client: Client, message: Message):
             # Parse username/userid and amount
             match = re.match(r"^@?(\w+)\s+(\d+(?:\.\d+)?)$", text)
             if not match:
-                await clean_send(client, user_id, "❌ Invalid format. Please write in `<username_or_userid> <amount>` format.", reply_markup=get_admin_keyboard())
+                await clean_send(client, user_id, "❌ Invalid format. Please write in `<username_or_userid> <amount>` format.", reply_markup=get_admin_keyboard(user_id))
                 return
                 
             user_identifier = match.group(1)
@@ -630,11 +644,12 @@ async def user_text_handler(client: Client, message: Message):
                     "room_id": "",
                     "room_password": "",
                     "slots": {str(i): None for i in range(1, max_participants + 1)},
-                    "created_at": datetime.now(IST)
+                    "created_at": datetime.now(IST),
+                    "created_by": user_id
                 })
-                await clean_send(client, user_id, "✅ Free Fire event created successfully!", reply_markup=get_admin_keyboard())
+                await clean_send(client, user_id, "✅ Free Fire event created successfully!", reply_markup=get_admin_keyboard(user_id))
             except Exception as e:
-                await clean_send(client, user_id, f"❌ Error saving event: {e}", reply_markup=get_admin_keyboard())
+                await clean_send(client, user_id, f"❌ Error saving event: {e}", reply_markup=get_admin_keyboard(user_id))
             return
 
         # 6. Free Fire Event Edit
@@ -687,9 +702,9 @@ async def user_text_handler(client: Client, message: Message):
                         "slots": new_slots
                     }}
                 )
-                await clean_send(client, user_id, "✅ Free Fire event updated successfully!", reply_markup=get_admin_keyboard())
+                await clean_send(client, user_id, "✅ Free Fire event updated successfully!", reply_markup=get_admin_keyboard(user_id))
             except Exception as e:
-                await clean_send(client, user_id, f"❌ Error updating event: {e}", reply_markup=get_admin_keyboard())
+                await clean_send(client, user_id, f"❌ Error updating event: {e}", reply_markup=get_admin_keyboard(user_id))
             return
 
         # 7. Free Fire Set Room Details
@@ -718,9 +733,9 @@ async def user_text_handler(client: Client, message: Message):
                         "room_password": room_password
                     }}
                 )
-                await clean_send(client, user_id, "✅ Free Fire Room ID and Password set successfully!", reply_markup=get_admin_keyboard())
+                await clean_send(client, user_id, "✅ Free Fire Room ID and Password set successfully!", reply_markup=get_admin_keyboard(user_id))
             except Exception as e:
-                await clean_send(client, user_id, f"❌ Error setting room details: {e}", reply_markup=get_admin_keyboard())
+                await clean_send(client, user_id, f"❌ Error setting room details: {e}", reply_markup=get_admin_keyboard(user_id))
             return
 
         # 8. Free Fire Declare Results
@@ -748,11 +763,56 @@ async def user_text_handler(client: Client, message: Message):
                 from database import declare_free_fire_results
                 success, msg = declare_free_fire_results(event_id, kills_data, booyah_slot)
                 if success:
-                    await clean_send(client, user_id, f"✅ {msg}", reply_markup=get_admin_keyboard())
+                    await clean_send(client, user_id, f"✅ {msg}", reply_markup=get_admin_keyboard(user_id))
                 else:
-                    await clean_send(client, user_id, f"❌ {msg}", reply_markup=get_admin_keyboard())
+                    await clean_send(client, user_id, f"❌ {msg}", reply_markup=get_admin_keyboard(user_id))
             except Exception as e:
-                await clean_send(client, user_id, f"❌ Error declaring results: {e}", reply_markup=get_admin_keyboard())
+                await clean_send(client, user_id, f"❌ Error declaring results: {e}", reply_markup=get_admin_keyboard(user_id))
+            return
+
+        # 9. Sub-Admin Create
+        elif state["action"] == "wait_sub_admin_create":
+            admin_states.pop(user_id, None)
+            parts = [p.strip() for p in text.split("|")]
+            if len(parts) != 2:
+                await clean_send(
+                    client,
+                    user_id,
+                    "❌ Invalid format. Please write exactly in the `User ID | Profit Percentage` format.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_manage_sub_admins")]])
+                )
+                return
+            try:
+                sub_id = int(parts[0])
+                pct = float(parts[1])
+                if pct < 0 or pct > 100:
+                    raise ValueError("Percentage must be between 0 and 100")
+                
+                # Check if user exists in our DB
+                target_user = get_user(sub_id)
+                if not target_user:
+                    await clean_send(
+                        client,
+                        user_id,
+                        f"❌ User ID `{sub_id}` not found in database. The user must start the bot first.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Back to Sub-Admins", callback_data="admin_manage_sub_admins")]])
+                    )
+                    return
+                
+                create_sub_admin(sub_id, pct)
+                await clean_send(
+                    client,
+                    user_id,
+                    f"✅ Sub-Admin created successfully for user `{sub_id}` (Share: {pct}%)!",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Back to Sub-Admins", callback_data="admin_manage_sub_admins")]])
+                )
+            except Exception as e:
+                await clean_send(
+                    client,
+                    user_id,
+                    f"❌ Error creating sub-admin: {e}. Please enter in `User ID | Profit Percentage` format (e.g. `123456 | 40`).",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Back to Sub-Admins", callback_data="admin_manage_sub_admins")]])
+                )
             return
             
     # Check user states
@@ -797,7 +857,7 @@ async def user_text_handler(client: Client, message: Message):
                 f"✅ **Deposit Submitted!**\n\n"
                 f"Deposit of **Rs {amount}** with Txn ID `{text}` is pending admin verification.\n"
                 f"You will receive a notification as soon as it is approved.",
-                reply_markup=get_start_keyboard(user_id, user_id == Config.ADMIN_ID)
+                reply_markup=get_start_keyboard(user_id, is_admin_user(user_id))
             )
             return
             
@@ -815,7 +875,7 @@ async def user_text_handler(client: Client, message: Message):
             )
             
             if not tx:
-                await clean_send(client, user_id, "❌ Error saving withdrawal details. Please try again.", reply_markup=get_start_keyboard(user_id, user_id == Config.ADMIN_ID))
+                await clean_send(client, user_id, "❌ Error saving withdrawal details. Please try again.", reply_markup=get_start_keyboard(user_id, is_admin_user(user_id)))
                 return
                 
             # Notify Admin
@@ -842,7 +902,7 @@ async def user_text_handler(client: Client, message: Message):
                 f"✅ **Withdrawal Request Registered!**\n\n"
                 f"Request to redeem **Rs {amount}** to `{text}` is pending admin transfer.\n"
                 f"Once processed, you will get a notification.",
-                reply_markup=get_start_keyboard(user_id, user_id == Config.ADMIN_ID)
+                reply_markup=get_start_keyboard(user_id, is_admin_user(user_id))
             )
             return
 
@@ -854,18 +914,18 @@ async def user_text_handler(client: Client, message: Message):
 async def admin_command_handler(client: Client, message: Message):
     user_id = message.from_user.id
     await clean_user_history(client, user_id, message.id)
-    if user_id != Config.ADMIN_ID:
+    if not is_admin_user(user_id):
         await clean_send(client, user_id, "❌ Access Denied: Admin only.")
         return
-    await clean_send(client, user_id, "⚙️ **Admin Panel**\n\nSelect control action:", reply_markup=get_admin_keyboard())
+    await clean_send(client, user_id, "⚙️ **Admin Panel**\n\nSelect control action:", reply_markup=get_admin_keyboard(user_id))
 
 @bot.on_callback_query(filters.regex("admin_panel"))
 async def admin_panel_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    if user_id != Config.ADMIN_ID:
+    if not is_admin_user(user_id):
         await query.answer("Access Denied.", show_alert=True)
         return
-    await query.edit_message_text("⚙️ **Admin Panel**\n\nSelect control action:", reply_markup=get_admin_keyboard())
+    await query.edit_message_text("⚙️ **Admin Panel**\n\nSelect control action:", reply_markup=get_admin_keyboard(user_id))
 
 @bot.on_callback_query(filters.regex("admin_stats"))
 async def admin_stats_callback(client: Client, query: CallbackQuery):
@@ -889,7 +949,7 @@ async def admin_stats_callback(client: Client, query: CallbackQuery):
         f"🏦 Total Wallet Liabilities (Current Balance): **Rs {stats['total_user_wallets']:.2f}**\n\n"
         f"📈 **Net Platform Profit/Loss:** **Rs {stats['net_profit']:.2f}**"
     )
-    await query.edit_message_text(text, reply_markup=get_admin_keyboard())
+    await query.edit_message_text(text, reply_markup=get_admin_keyboard(user_id))
 
 @bot.on_callback_query(filters.regex("admin_manage_buttons"))
 async def admin_manage_buttons_callback(client: Client, query: CallbackQuery):
@@ -1332,7 +1392,7 @@ async def admin_unban_user_callback(client: Client, query: CallbackQuery):
 @bot.on_callback_query(filters.regex("admin_ff_events"))
 async def admin_ff_events_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    if user_id != Config.ADMIN_ID:
+    if not is_admin_user(user_id):
         await query.answer("Access Denied.", show_alert=True)
         return
     
@@ -1369,7 +1429,7 @@ async def admin_ff_events_callback(client: Client, query: CallbackQuery):
 @bot.on_callback_query(filters.regex(r"^adm_ffdel_(.+)"))
 async def admin_ff_delete_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    if user_id != Config.ADMIN_ID:
+    if not is_admin_user(user_id):
         await query.answer("Access Denied.", show_alert=True)
         return
         
@@ -1414,7 +1474,7 @@ async def admin_ff_delete_callback(client: Client, query: CallbackQuery):
 @bot.on_callback_query(filters.regex("admin_ff_create"))
 async def admin_ff_create_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    if user_id != Config.ADMIN_ID:
+    if not is_admin_user(user_id):
         await query.answer("Access Denied.", show_alert=True)
         return
         
@@ -1435,7 +1495,7 @@ async def admin_ff_create_callback(client: Client, query: CallbackQuery):
 @bot.on_callback_query(filters.regex(r"^adm_ffedit_(.+)"))
 async def admin_ff_edit_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    if user_id != Config.ADMIN_ID:
+    if not is_admin_user(user_id):
         await query.answer("Access Denied.", show_alert=True)
         return
         
@@ -1465,7 +1525,7 @@ async def admin_ff_edit_callback(client: Client, query: CallbackQuery):
 @bot.on_callback_query(filters.regex(r"^adm_ffroom_(.+)"))
 async def admin_ff_room_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    if user_id != Config.ADMIN_ID:
+    if not is_admin_user(user_id):
         await query.answer("Access Denied.", show_alert=True)
         return
         
@@ -1495,7 +1555,7 @@ async def admin_ff_room_callback(client: Client, query: CallbackQuery):
 @bot.on_callback_query(filters.regex(r"^adm_ffres_(.+)"))
 async def admin_ff_result_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
-    if user_id != Config.ADMIN_ID:
+    if not is_admin_user(user_id):
         await query.answer("Access Denied.", show_alert=True)
         return
         
@@ -1542,4 +1602,83 @@ async def admin_ff_result_callback(client: Client, query: CallbackQuery):
     await query.edit_message_text(
         instruction, 
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_ff_events")]])
+    )
+
+@bot.on_callback_query(filters.regex("admin_manage_sub_admins"))
+async def admin_manage_sub_admins_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        await query.answer("Access Denied.", show_alert=True)
+        return
+        
+    sub_admins = get_all_sub_admins()
+    
+    text = "👥 **Sub-Admins Management**\n\n"
+    if not sub_admins:
+        text += "No sub-admins configured yet."
+    else:
+        for idx, sa in enumerate(sub_admins):
+            text += f"**{idx+1}. User ID:** `{sa['_id']}`\n"
+            text += f"📈 Profit Share: **{sa['profit_percentage']}%**\n\n"
+            
+    keyboard_rows = []
+    for sa in sub_admins:
+        keyboard_rows.append([
+            InlineKeyboardButton(f"❌ Remove ID: {sa['_id']}", callback_data=f"adm_subdel_{sa['_id']}")
+        ])
+    keyboard_rows.append([InlineKeyboardButton("➕ Create Sub-Admin", callback_data="admin_sub_create")])
+    keyboard_rows.append([InlineKeyboardButton("↩️ Back to Admin Panel", callback_data="admin_panel")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard_rows))
+
+@bot.on_callback_query(filters.regex(r"^adm_subdel_(.+)"))
+async def admin_sub_delete_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        await query.answer("Access Denied.", show_alert=True)
+        return
+        
+    sub_id = int(query.matches[0].group(1))
+    delete_sub_admin(sub_id)
+    await query.answer("Sub-admin removed successfully!", show_alert=True)
+    
+    # Refresh view
+    sub_admins = get_all_sub_admins()
+    text = "👥 **Sub-Admins Management**\n\n"
+    if not sub_admins:
+        text += "No sub-admins configured yet."
+    else:
+        for idx, sa in enumerate(sub_admins):
+            text += f"**{idx+1}. User ID:** `{sa['_id']}`\n"
+            text += f"📈 Profit Share: **{sa['profit_percentage']}%**\n\n"
+            
+    keyboard_rows = []
+    for sa in sub_admins:
+        keyboard_rows.append([
+            InlineKeyboardButton(f"❌ Remove ID: {sa['_id']}", callback_data=f"adm_subdel_{sa['_id']}")
+        ])
+    keyboard_rows.append([InlineKeyboardButton("➕ Create Sub-Admin", callback_data="admin_sub_create")])
+    keyboard_rows.append([InlineKeyboardButton("↩️ Back to Admin Panel", callback_data="admin_panel")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard_rows))
+
+@bot.on_callback_query(filters.regex("admin_sub_create"))
+async def admin_sub_create_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        await query.answer("Access Denied.", show_alert=True)
+        return
+        
+    admin_states[user_id] = {"action": "wait_sub_admin_create"}
+    
+    instruction = (
+        "➕ **Create Sub-Admin**\n\n"
+        "Please send the user ID and profit percentage share in this exact format:\n\n"
+        "`User ID | Profit Percentage`\n\n"
+        "**Example:**\n"
+        "`5802486388 | 40`"
+    )
+    await query.edit_message_text(
+        instruction, 
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_manage_sub_admins")]])
     )
