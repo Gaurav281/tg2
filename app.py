@@ -233,7 +233,7 @@ def get_user_api(user_id):
     from database import free_fire_events_col
     active_ff_rooms = []
     try:
-        for ev in free_fire_events_col.find():
+        for ev in free_fire_events_col.find({"results_declared": {"$ne": True}}):
             slots = ev.get("slots", {})
             for slot_key, slot_val in slots.items():
                 if slot_val and slot_val.get("user_id") == actual_user_id:

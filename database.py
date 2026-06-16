@@ -154,11 +154,16 @@ def create_user(user_id, username, first_name, referred_by=None):
     users_col.insert_one(user_doc)
 
     
-    # Update referral count for inviter
+    # Update referral count for inviter and add +1 free car game chance directly
     if inviter_id:
         users_col.update_one(
             {"_id": inviter_id},
-            {"$inc": {"referrals_count": 1}}
+            {
+                "$inc": {
+                    "referrals_count": 1,
+                    "free_car_game_chances": 1
+                }
+            }
         )
         # Log referral transaction (informational or referral bonuses can be claimed in rewards tab)
         
@@ -187,10 +192,15 @@ def submit_invite_code(user_id, invite_code):
         {"_id": user_id},
         {"$set": {"referred_by": inviter_id}}
     )
-    # Increment inviter's referral count
+    # Increment inviter's referral count and add +1 free car game chance directly
     users_col.update_one(
         {"_id": inviter_id},
-        {"$inc": {"referrals_count": 1}}
+        {
+            "$inc": {
+                "referrals_count": 1,
+                "free_car_game_chances": 1
+            }
+        }
     )
     return True, "Invite code submitted successfully!"
 
@@ -813,12 +823,11 @@ def claim_referral_reward(user_id, tier=None):
         
     reward_amt = round(new_referrals * 1.00, 2)
     
-    # Update DB: mark referrals claimed and give +1 free car game chance
+    # Update DB: mark referrals claimed
     users_col.update_one(
         {"_id": user_id},
         {
-            "$set": {"referrals_claimed_count": valid_count},
-            "$inc": {"free_car_game_chances": 1}
+            "$set": {"referrals_claimed_count": valid_count}
         }
     )
     
@@ -1461,8 +1470,8 @@ def resolve_cricket_event_cycle(cycle_id):
 
 # --- Free Fire Event Operations ---
 def get_free_fire_events():
-    """Retrieve all available Free Fire events."""
-    events = list(free_fire_events_col.find())
+    """Retrieve all available Free Fire events (not yet declared)."""
+    events = list(free_fire_events_col.find({"results_declared": {"$ne": True}}))
     formatted = []
     for ev in events:
         slots = ev.get("slots", {})
@@ -1505,7 +1514,7 @@ def join_free_fire_event(user_id, event_id, slot_number):
         return False, "Invalid event ID"
         
     ev = free_fire_events_col.find_one({"_id": ev_id})
-    if not ev:
+    if not ev or ev.get("results_declared"):
         return False, "Event not found"
         
     slots = ev.get("slots", {})
@@ -1703,14 +1712,14 @@ def declare_free_fire_results(event_id, kills_data, booyah_slot=None):
                         except Exception as ne:
                             print(f"Failed to notify sub-admin {creator_id}: {ne}")
 
-    # Reset event slots and clear Room ID / Password so it restarts cycle
-    reset_slots = {str(i): None for i in range(1, ev["max_participants"] + 1)}
+    # Mark event as declared and save details
     free_fire_events_col.update_one(
         {"_id": ev_id},
         {"$set": {
-            "slots": reset_slots,
-            "room_id": "",
-            "room_password": ""
+            "results_declared": True,
+            "declared_at": datetime.now(IST),
+            "kills_data": kills_data,
+            "booyah_slot": booyah_slot
         }}
     )
     return True, "Results declared and rewards distributed successfully!"

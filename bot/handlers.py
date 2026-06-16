@@ -572,7 +572,17 @@ async def user_text_handler(client: Client, message: Message):
         
         # Check authorization
         if state["action"] in ["wait_ff_create", "wait_ff_edit", "wait_ff_room", "wait_ff_result"]:
-            pass
+            # Check ownership for edit/room/result if sub-admin
+            if is_sub and not is_main_admin and state["action"] in ["wait_ff_edit", "wait_ff_room", "wait_ff_result"]:
+                event_id = state.get("event_id")
+                if event_id:
+                    from database import free_fire_events_col
+                    from bson.objectid import ObjectId
+                    ev = free_fire_events_col.find_one({"_id": ObjectId(event_id)})
+                    if not ev or ev.get("created_by") != user_id:
+                        admin_states.pop(user_id, None)
+                        await clean_send(client, user_id, "❌ Access Denied: You do not own this tournament.", reply_markup=get_admin_keyboard(user_id))
+                        return
         elif is_main_admin:
             pass
         else:
@@ -1416,8 +1426,14 @@ async def admin_ff_events_callback(client: Client, query: CallbackQuery):
         await query.answer("Access Denied.", show_alert=True)
         return
     
-    from database import get_free_fire_events
+    from database import get_free_fire_events, is_sub_admin
     events = get_free_fire_events()
+    
+    # Restrict sub-admins to manage only the events they created
+    is_sa = is_sub_admin(user_id)
+    is_main = (user_id == Config.ADMIN_ID)
+    if is_sa and not is_main:
+        events = [ev for ev in events if ev.get("created_by") == user_id]
     
     text = "🏆 **Free Fire Tournaments**\n\n"
     if not events:
@@ -1454,8 +1470,17 @@ async def admin_ff_delete_callback(client: Client, query: CallbackQuery):
         return
         
     event_id = query.data.split("_")[2]
-    from database import free_fire_events_col
+    from database import is_sub_admin, free_fire_events_col
     from bson.objectid import ObjectId
+    
+    is_sa = is_sub_admin(user_id)
+    is_main = (user_id == Config.ADMIN_ID)
+    if is_sa and not is_main:
+        ev = free_fire_events_col.find_one({"_id": ObjectId(event_id)})
+        if not ev or ev.get("created_by") != user_id:
+            await query.answer("Access Denied: You do not own this tournament.", show_alert=True)
+            return
+            
     try:
         free_fire_events_col.delete_one({"_id": ObjectId(event_id)})
         await query.answer("Event deleted successfully!", show_alert=True)
@@ -1465,6 +1490,9 @@ async def admin_ff_delete_callback(client: Client, query: CallbackQuery):
     # Refresh events list
     from database import get_free_fire_events
     events = get_free_fire_events()
+    if is_sa and not is_main:
+        events = [ev for ev in events if ev.get("created_by") == user_id]
+        
     text = "🏆 **Free Fire Tournaments**\n\n"
     if not events:
         text += "No active tournaments."
@@ -1520,6 +1548,17 @@ async def admin_ff_edit_callback(client: Client, query: CallbackQuery):
         return
         
     event_id = query.data.split("_")[2]
+    
+    from database import is_sub_admin, free_fire_events_col
+    from bson.objectid import ObjectId
+    is_sa = is_sub_admin(user_id)
+    is_main = (user_id == Config.ADMIN_ID)
+    if is_sa and not is_main:
+        ev = free_fire_events_col.find_one({"_id": ObjectId(event_id)})
+        if not ev or ev.get("created_by") != user_id:
+            await query.answer("Access Denied: You do not own this tournament.", show_alert=True)
+            return
+            
     admin_states[user_id] = {"action": "wait_ff_edit", "event_id": event_id}
     
     from database import free_fire_events_col
@@ -1550,6 +1589,17 @@ async def admin_ff_room_callback(client: Client, query: CallbackQuery):
         return
         
     event_id = query.data.split("_")[2]
+    
+    from database import is_sub_admin, free_fire_events_col
+    from bson.objectid import ObjectId
+    is_sa = is_sub_admin(user_id)
+    is_main = (user_id == Config.ADMIN_ID)
+    if is_sa and not is_main:
+        ev = free_fire_events_col.find_one({"_id": ObjectId(event_id)})
+        if not ev or ev.get("created_by") != user_id:
+            await query.answer("Access Denied: You do not own this tournament.", show_alert=True)
+            return
+            
     admin_states[user_id] = {"action": "wait_ff_room", "event_id": event_id}
     
     from database import free_fire_events_col
@@ -1580,6 +1630,17 @@ async def admin_ff_result_callback(client: Client, query: CallbackQuery):
         return
         
     event_id = query.data.split("_")[2]
+    
+    from database import is_sub_admin, free_fire_events_col
+    from bson.objectid import ObjectId
+    is_sa = is_sub_admin(user_id)
+    is_main = (user_id == Config.ADMIN_ID)
+    if is_sa and not is_main:
+        ev = free_fire_events_col.find_one({"_id": ObjectId(event_id)})
+        if not ev or ev.get("created_by") != user_id:
+            await query.answer("Access Denied: You do not own this tournament.", show_alert=True)
+            return
+            
     admin_states[user_id] = {"action": "wait_ff_result", "event_id": event_id}
     
     from database import free_fire_events_col
@@ -1702,3 +1763,74 @@ async def admin_sub_create_callback(client: Client, query: CallbackQuery):
         instruction, 
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_manage_sub_admins")]])
     )
+
+@bot.on_callback_query(filters.regex("admin_ff_declared"))
+async def admin_ff_declared_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        await query.answer("Access Denied.", show_alert=True)
+        return
+        
+    from database import free_fire_events_col
+    events = list(free_fire_events_col.find({"results_declared": True}))
+    
+    text = "📁 **Declared Free Fire Tournaments**\n\nSelect a tournament to view details:\n\n"
+    if not events:
+        text += "No declared tournaments found."
+        
+    keyboard_rows = []
+    for ev in events:
+        keyboard_rows.append([
+            InlineKeyboardButton(
+                f"{ev['mode']} - {ev['map']} ({ev.get('date', '')})", 
+                callback_data=f"adm_ffdecview_{ev['_id']}"
+            )
+        ])
+    keyboard_rows.append([InlineKeyboardButton("↩️ Back to Admin Panel", callback_data="admin_panel")])
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard_rows))
+
+@bot.on_callback_query(filters.regex(r"^adm_ffdecview_(.+)"))
+async def admin_ff_declared_view_callback(client: Client, query: CallbackQuery):
+    user_id = query.from_user.id
+    if user_id != Config.ADMIN_ID:
+        await query.answer("Access Denied.", show_alert=True)
+        return
+        
+    event_id = query.data.split("_")[2]
+    from database import free_fire_events_col
+    from bson.objectid import ObjectId
+    ev = free_fire_events_col.find_one({"_id": ObjectId(event_id)})
+    if not ev:
+        await query.answer("Tournament not found.", show_alert=True)
+        return
+        
+    kills_data = ev.get("kills_data", {})
+    booyah_slot = ev.get("booyah_slot")
+    slots = ev.get("slots", {})
+    
+    text = (
+        f"📁 **Declared Tournament Details**\n\n"
+        f"🏆 **{ev['mode']} - {ev['map']}**\n"
+        f"📅 Date: {ev.get('date', '')} | Time: {ev['start_time']} to {ev['end_time']}\n"
+        f"💰 Entry Fee: Rs {ev['entry_fee']} | Prize/Kill: Rs {ev['prize_per_kill']} | Booyah: Rs {ev.get('booyah_prize', 0.0)}\n\n"
+        f"👥 **Results & Rankings:**\n"
+    )
+    
+    results_list = []
+    for slot_key, occupant in slots.items():
+        if occupant:
+            kills = kills_data.get(slot_key, 0)
+            is_booyah = (booyah_slot is not None and str(booyah_slot).strip() == slot_key)
+            booyah_tag = " 👑 (BOOYAH)" if is_booyah else ""
+            results_list.append(
+                f"• Slot #{slot_key}: {occupant['ff_username']} ({occupant['ff_uid']})\n"
+                f"  Kills: {kills} | Winner: {'Yes' if (is_booyah or kills > 0) else 'No'}{booyah_tag}"
+            )
+            
+    if results_list:
+        text += "\n".join(results_list)
+    else:
+        text += "No participants registered."
+        
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Back to List", callback_data="admin_ff_declared")]])
+    await query.edit_message_text(text, reply_markup=keyboard)

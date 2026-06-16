@@ -143,6 +143,7 @@ def get_admin_keyboard(user_id=None):
             InlineKeyboardButton("📤 Pending Redeems", callback_data="admin_pending_red")
         ],
         [InlineKeyboardButton("🏆 Free Fire Events", callback_data="admin_ff_events")],
+        [InlineKeyboardButton("📁 Declared FF Tournaments", callback_data="admin_ff_declared")],
         [InlineKeyboardButton("👥 Manage Sub-Admins", callback_data="admin_manage_sub_admins")],
         [InlineKeyboardButton("🔑 Manage Start Buttons", callback_data="admin_manage_buttons")],
         [InlineKeyboardButton("📣 Broadcast Message", callback_data="admin_broadcast")],
