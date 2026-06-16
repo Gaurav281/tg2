@@ -801,7 +801,7 @@ def claim_referral_reward(user_id, tier=None):
     
     new_referrals = valid_count - claimed_count
     if new_referrals < 25:
-        return False, "min rs25 invites required to claim"
+        return False, "Min Rs 25 required to claim. +1 free car game chance is added succssfully."
         
     # Check deposit requirement: has deposited min 20 once (either single deposit >= 20, or sum >= 20)
     has_deposited_20 = transactions_col.find_one({
@@ -1490,7 +1490,8 @@ def get_free_fire_events():
             "room_id": ev.get("room_id", ""),
             "room_password": ev.get("room_password", ""),
             "joined_count": joined_count,
-            "slots": slots
+            "slots": slots,
+            "created_by": ev.get("created_by")
         })
     return formatted
 
