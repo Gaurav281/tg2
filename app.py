@@ -130,15 +130,36 @@ def verify_task_route(task_id):
 
 # Channel join check cache: user_id (int) -> {"joined": bool, "expires_at": float}
 channel_membership_cache = {}
+telegram_accessible = True
+last_telegram_check = 0.0
 
 def is_user_member_of_channel(user_id):
-    """Check if the user is a member of the Telegram channel free_fire_play_earn, with caching."""
+    """Check if the user is a member of the Telegram channel free_fire_play_earn, with caching and fallback for Telegram block."""
+    global telegram_accessible, last_telegram_check
+    
     try:
         user_id_int = int(user_id)
     except ValueError:
         return False
 
     current_time = time.time()
+    
+    # Verify Telegram API connectivity periodically (every 5 minutes)
+    if current_time - last_telegram_check > 300.0:
+        last_telegram_check = current_time
+        try:
+            async def test_access():
+                await bot_client.get_chat("free_fire_play_earn")
+            future = asyncio.run_coroutine_threadsafe(test_access(), bot_loop)
+            future.result(timeout=1.5)
+            telegram_accessible = True
+        except Exception as e:
+            print(f"Telegram API connectivity offline or blocked: {e}")
+            telegram_accessible = False
+
+    if not telegram_accessible:
+        return True # Suppress blocks and banners, returning success instantly
+
     cached = channel_membership_cache.get(user_id_int)
     if cached and cached["expires_at"] > current_time:
         return cached["joined"]
@@ -147,23 +168,21 @@ def is_user_member_of_channel(user_id):
     try:
         async def check_member():
             try:
-                # bot_client is imported from bot.client
                 member = await bot_client.get_chat_member("free_fire_play_earn", user_id_int)
                 status = str(member.status).lower()
                 if "left" in status or "kicked" in status or "banned" in status:
                     return False
                 return True
             except Exception as e:
-                # E.g., UserNotParticipant or generic Pyrogram error
                 print(f"Pyrogram check_member error for {user_id_int}: {e}")
                 return False
 
-        # Schedule the check_member coroutine on the background event loop (bot_loop)
         future = asyncio.run_coroutine_threadsafe(check_member(), bot_loop)
-        joined = future.result(timeout=4.0)
+        joined = future.result(timeout=1.5)
     except Exception as e:
         print(f"Error checking channel membership in thread for {user_id_int}: {e}")
-        joined = False
+        telegram_accessible = False
+        joined = True
 
     # Cache: 10 minutes if joined, 1 minute if not joined (so they can join and get updated quickly)
     duration = 600 if joined else 60
