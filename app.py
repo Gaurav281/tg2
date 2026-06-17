@@ -195,10 +195,13 @@ def is_user_member_of_channel(user_id):
 
 @app.route("/api/login-email", methods=["POST"])
 def login_email_api():
-    """Authenticate or register a user using their Gmail address, validating password and enforcing 2-emails-per-IP limit."""
+    """Authenticate or register a user using their Gmail address, validating name/password and enforcing 2-emails-per-IP limit."""
     data = request.json or {}
     email = data.get("email", "").strip().lower()
     password = data.get("password", "").strip()
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Please enter your name."}), 400
     if not email:
         return jsonify({"error": "Please enter a valid Gmail address."}), 400
     if not email.endswith("@gmail.com"):
@@ -227,8 +230,8 @@ def login_email_api():
             # Set password for legacy accounts
             users_col.update_one({"_id": existing_user["_id"]}, {"$set": {"password": password}})
             
-        # Update IP address
-        users_col.update_one({"_id": existing_user["_id"]}, {"$set": {"ip_address": ip_addr}})
+        # Update name and IP address
+        users_col.update_one({"_id": existing_user["_id"]}, {"$set": {"ip_address": ip_addr, "first_name": name}})
         return jsonify({
             "success": True,
             "unique_id": existing_user["unique_id"],
@@ -255,7 +258,7 @@ def login_email_api():
         "unique_id": generate_unique_id(),
         "invite_code": generate_invite_code(),
         "username": email.split("@")[0],
-        "first_name": "Email User",
+        "first_name": name,
         "email": email,
         "password": password,
         "ip_address": ip_addr,
