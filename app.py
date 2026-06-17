@@ -1409,6 +1409,13 @@ def start_rummy_turn_timer(match_id):
     rummy_timers[match_id] = timer
     timer.start()
 
+def broadcast_rummy_update(match):
+    for p in match.players:
+        user_id = p["user_id"]
+        sid = connected_users.get(user_id)
+        if sid:
+            socketio.emit("rummy_update", match.to_dict(self_user_id=user_id), to=sid)
+
 def execute_rummy_timeout(match_id):
     with app.app_context():
         match = rummy_matches.get(match_id)
@@ -1429,14 +1436,14 @@ def execute_rummy_timeout(match_id):
             discard_card = random.choice(hand)
             match.discard_card(user_id, discard_card)
             
-        socketio.emit("rummy_update", match.to_dict(), to=f"rummy_{match_id}")
+        broadcast_rummy_update(match)
         start_rummy_turn_timer(match_id)
 
 @socketio.on("create_rummy_room")
 def handle_create_rummy_room(data):
     user_id = int(data["userId"])
     username = data.get("username", f"User_{user_id}")
-    max_players = int(data.get("maxPlayers", 4))
+    max_players = 4 # Hardcoded to 4: Creator + up to 3 friends (1 friend min required to start)
     
     match = RummyMatch(creator_id=user_id, creator_name=username, max_players=max_players)
     
@@ -1451,7 +1458,7 @@ def handle_create_rummy_room(data):
         
     rummy_matches[match.match_id] = match
     join_room(f"rummy_{match.match_id}")
-    emit("rummy_update", match.to_dict(self_user_id=user_id))
+    broadcast_rummy_update(match)
 
 @socketio.on("join_rummy_room")
 def handle_join_rummy_room(data):
@@ -1476,8 +1483,7 @@ def handle_join_rummy_room(data):
     success = match.add_player(user_id, username)
     if success:
         join_room(f"rummy_{match.match_id}")
-        socketio.emit("rummy_update", match.to_dict(), to=f"rummy_{match.match_id}")
-        emit("rummy_update", match.to_dict(self_user_id=user_id))
+        broadcast_rummy_update(match)
     else:
         emit("rummy_error", {"message": "Could not join room."})
 
@@ -1497,7 +1503,7 @@ def handle_start_rummy_game(data):
         
     success, msg = match.start_game()
     if success:
-        socketio.emit("rummy_update", match.to_dict(), to=f"rummy_{match_id}")
+        broadcast_rummy_update(match)
         start_rummy_turn_timer(match_id)
     else:
         emit("rummy_error", {"message": msg})
@@ -1515,8 +1521,7 @@ def handle_rummy_draw_card(data):
         
     success, card_or_err = match.draw_card(user_id, source)
     if success:
-        socketio.emit("rummy_update", match.to_dict(), to=f"rummy_{match_id}")
-        emit("rummy_update", match.to_dict(self_user_id=user_id))
+        broadcast_rummy_update(match)
     else:
         emit("rummy_error", {"message": card_or_err})
 
@@ -1534,7 +1539,7 @@ def handle_rummy_discard_card(data):
     success, msg = match.discard_card(user_id, card)
     if success:
         cancel_rummy_timer(match_id)
-        socketio.emit("rummy_update", match.to_dict(), to=f"rummy_{match_id}")
+        broadcast_rummy_update(match)
         start_rummy_turn_timer(match_id)
     else:
         emit("rummy_error", {"message": msg})
@@ -1563,7 +1568,7 @@ def handle_rummy_declare(data):
     success, msg = match.declare(user_id, groups)
     if success:
         cancel_rummy_timer(match_id)
-        socketio.emit("rummy_update", match.to_dict(), to=f"rummy_{match_id}")
+        broadcast_rummy_update(match)
     else:
         emit("rummy_error", {"message": msg})
 
@@ -1579,7 +1584,7 @@ def handle_leave_rummy_room(data):
             cancel_rummy_timer(match_id)
             rummy_matches.pop(match_id, None)
         else:
-            socketio.emit("rummy_update", match.to_dict(), to=f"rummy_{match_id}")
+            broadcast_rummy_update(match)
         leave_room(f"rummy_{match_id}")
 
 
