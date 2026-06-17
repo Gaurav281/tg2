@@ -173,6 +173,90 @@ def is_user_member_of_channel(user_id):
     }
     return joined
 
+@app.route("/api/login-email", methods=["POST"])
+def login_email_api():
+    """Authenticate or register a user using their Gmail address and enforce 2-emails-per-IP limit."""
+    data = request.json or {}
+    email = data.get("email", "").strip().lower()
+    if not email:
+        return jsonify({"error": "Please enter a valid Gmail address."}), 400
+    if not email.endswith("@gmail.com"):
+        return jsonify({"error": "Please enter a valid Google Gmail address (must end with @gmail.com)."}), 400
+
+    # Get client IP address
+    ip_addr = request.headers.get('X-Forwarded-For', request.remote_addr)
+    if ',' in ip_addr:
+        ip_addr = ip_addr.split(',')[0].strip()
+
+    from database import users_col, generate_unique_id, generate_invite_code, IST
+    import random
+    from datetime import datetime
+
+    # Check if user already exists
+    existing_user = users_col.find_one({"email": email})
+    if existing_user:
+        # Update IP address
+        users_col.update_one({"_id": existing_user["_id"]}, {"$set": {"ip_address": ip_addr}})
+        return jsonify({
+            "success": True,
+            "unique_id": existing_user["unique_id"],
+            "user_id": existing_user["_id"],
+            "new_registration": False
+        })
+
+    # Retrieve all users registered from this IP with an email
+    ip_users = list(users_col.find({"ip_address": ip_addr, "email": {"$exists": True, "$ne": None}}))
+    registered_emails = {u["email"].strip().lower() for u in ip_users if "email" in u}
+
+    if email not in registered_emails:
+        if len(registered_emails) >= 2:
+            return jsonify({"error": "you already have a account ."}), 400
+
+    # Register new user
+    while True:
+        new_id = random.randint(1000000000, 9999999999)
+        if not users_col.find_one({"_id": new_id}, {"_id": 1}):
+            break
+
+    user_doc = {
+        "_id": new_id,
+        "unique_id": generate_unique_id(),
+        "invite_code": generate_invite_code(),
+        "username": email.split("@")[0],
+        "first_name": "Email User",
+        "email": email,
+        "ip_address": ip_addr,
+        "balance": 0.0,
+        "deposit_balance": 0.0,
+        "winning_balance": 0.0,
+        "free_fire_username": "",
+        "free_fire_uid": "",
+        "streak": 0,
+        "last_streak_claim": None,
+        "referred_by": None,
+        "referrals_count": 0,
+        "referral_claimed": [],
+        "daily_missions": {
+            "date": datetime.now(IST).strftime("%Y-%m-%d"),
+            "matches_played": 0,
+            "balance_added": 0.0,
+            "max_score": 0,
+            "claimed": {
+                "matches_3": False,
+                "add_balance": False
+            }
+        },
+        "is_banned": False,
+        "created_at": datetime.now(IST)
+    }
+    users_col.insert_one(user_doc)
+    return jsonify({
+        "success": True,
+        "unique_id": user_doc["unique_id"],
+        "user_id": new_id,
+        "new_registration": True
+    })
+
 @app.route("/api/user/<user_id>", methods=["GET"])
 def get_user_api(user_id):
     """Retrieve user details for React Web App store."""
